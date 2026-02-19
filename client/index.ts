@@ -1,12 +1,13 @@
-import { Context } from '@koishijs/client'
-import Page from './page.vue'
+import { Context } from "@koishijs/client";
+import Page from "./page.vue";
 
-import 'virtual:uno.css'
+import "virtual:uno.css";
 
 export default (ctx: Context) => {
   ctx.page({
-    name: '扩展页面',
-    path: '/custom-page',
+    name: "同步机器人",
+    path: "/syncbot",
+    // fields: ["wikiDatapush"],
     component: Page,
-  })
-}
+  });
+};
