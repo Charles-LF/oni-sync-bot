@@ -9,7 +9,6 @@
     "dist"
   ],
   "license": "MIT",
-  "scripts": {},
   "keywords": [
     "chatbot",
     "koishi",
@@ -21,5 +20,8 @@
   "peerDependencies": {
     "@koishijs/plugin-console": "^5.30.4",
     "koishi": "^4.18.7"
+  },
+  "dependencies": {
+    "mwn": "^3.0.1"
   }
 }

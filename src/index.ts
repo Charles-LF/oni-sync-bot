@@ -1,18 +1,19 @@
-import { Context, Schema } from 'koishi'
-import { resolve } from 'path'
-import {} from '@koishijs/plugin-console'
+import { Context, Schema } from "koishi";
+import { resolve } from "path";
+import {} from "@koishijs/plugin-console";
 
-export const name = 'oni-sync-bot'
+export const name = "oni-sync-bot";
 
 export interface Config {}
 
-export const Config: Schema<Config> = Schema.object({})
+export const Config: Schema<Config> = Schema.object({});
 
 export function apply(ctx: Context, config: Config) {
-  ctx.inject(['console'], (ctx) => {
+  // 注入控制台插件
+  ctx.inject(["console"], (ctx) => {
     ctx.console.addEntry({
-      dev: resolve(__dirname, '../client/index.ts'),
-      prod: resolve(__dirname, '../dist'),
-    })
-  })
+      dev: resolve(__dirname, "../client/index.ts"),
+      prod: resolve(__dirname, "../dist"),
+    });
+  });
 }
