@@ -1,11 +1,12 @@
 import { Mwn } from "mwn";
 import { getAndProcessPageContent } from "../utils/tools";
 import { sleep } from "koishi";
+
 const CONFIG = {
-  MODLE_NAMESPACE: 828, // 模块命名空间
+  MODLE_NAMESPACE: 828, // 模块命名空间 (注意：这里原代码拼写为 MODLE，保留原样)
   IGNORED_MODULES: [], // 忽略的模块列表
-  SYNC_INTERVAL_SUCCESS: 1000, // 同步成功后等待时间（毫秒）
-  SYNC_INTERVAL_FAILED: 2000, // 同步失败后等待时间（毫秒）
+  SYNC_INTERVAL_SUCCESS: 500, // 同步成功后等待时间（毫秒）
+  SYNC_INTERVAL_FAILED: 1000, // 同步失败后等待时间（毫秒）
 };
 
 /**
@@ -101,8 +102,11 @@ async function syncModules(oldSite: Mwn, newSite: Mwn): Promise<void> {
     let successCount = 0;
     let failCount = 0;
     let skipCount = 0;
-    console.log(`[SyncAllPages] 🚦 开始批量同步，总计 ${total} 个页面`);
-    // 串行同步每个页面
+    const failedModules: string[] = []; // 记录第一轮失败的模块
+
+    console.log(`[SyncAllModules] 🚦 开始批量同步，总计 ${total} 个模块`);
+
+    // 第一轮：串行同步每个模块
     for (let index = 0; index < total; index++) {
       const moduleTitle = oldModuleList[index];
       const current = index + 1;
@@ -122,6 +126,7 @@ async function syncModules(oldSite: Mwn, newSite: Mwn): Promise<void> {
       // 更新统计
       if (!syncResult.success) {
         failCount++;
+        failedModules.push(moduleTitle); // 记录失败标题
         await sleep(CONFIG.SYNC_INTERVAL_FAILED);
       } else {
         successCount++;
@@ -134,6 +139,55 @@ async function syncModules(oldSite: Mwn, newSite: Mwn): Promise<void> {
         await sleep(CONFIG.SYNC_INTERVAL_SUCCESS);
       }
     }
+
+    // 第二轮：重试失败的模块
+    if (failedModules.length > 0) {
+      console.log(
+        `\n[SyncAllModules] 🔄 ===== 开始重试 ${failedModules.length} 个失败模块 =====`,
+      );
+
+      const stillFailed: string[] = [];
+
+      for (const moduleTitle of failedModules) {
+        console.log(`\n[SyncAllModules] 🔁 重试中: ${moduleTitle}`);
+
+        const syncResult = await syncSingleModule(
+          oldSite,
+          newSite,
+          moduleTitle,
+          "同步坤器人",
+        );
+
+        if (syncResult.success) {
+          successCount++;
+          failCount--; // 修正统计数据
+          if (
+            syncResult.reason === "ignored" ||
+            syncResult.reason === "no_change"
+          ) {
+            skipCount++;
+          }
+          console.log(`[SyncAllModules] ✅ 模块 ${moduleTitle} 重试成功`);
+          await sleep(CONFIG.SYNC_INTERVAL_SUCCESS);
+        } else {
+          stillFailed.push(moduleTitle);
+          console.log(`[SyncAllModules] ❌ 模块 ${moduleTitle} 再次失败`);
+          await sleep(CONFIG.SYNC_INTERVAL_FAILED);
+        }
+      }
+
+      // 最终汇总报告
+      console.log(`\n[SyncAllModules] 📋 ===== 最终同步报告 =====`);
+      if (stillFailed.length > 0) {
+        console.log(`❌ 以下模块经过重试仍然失败，请手动检查：`);
+        stillFailed.forEach((title, idx) => {
+          console.log(`  ${idx + 1}. ${title}`);
+        });
+      } else {
+        console.log(`🎉 所有模块同步成功（含重试）！`);
+      }
+    }
+
     // 汇总结果
     console.log(`\n[SyncAllModules] 🎯 同步完成！`);
     console.log(`├─ 总计：${total} 个模块`);

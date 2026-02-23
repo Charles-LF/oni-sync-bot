@@ -4,8 +4,8 @@ import { sleep } from "koishi";
 
 export const CONFIG = {
   IGNORED_PAGES: ["教程", "MediaWiki:Common.css"], // 忽略的页面列表
-  SYNC_INTERVAL_SUCCESS: 1000, // 成功后等待时间(ms)
-  SYNC_INTERVAL_FAILED: 2000, // 失败后等待时间(ms)
+  SYNC_INTERVAL_SUCCESS: 500, // 成功后等待时间(ms)
+  SYNC_INTERVAL_FAILED: 1000, // 失败后等待时间(ms)
   NAMESPACE: 0, // 同步主命名空间
   BATCH_LIMIT: "max", // API单次请求最大数量
 };
@@ -103,9 +103,11 @@ async function syncPages(oldSite: Mwn, newSite: Mwn): Promise<void> {
     let successCount = 0;
     let failCount = 0;
     let skipCount = 0;
+    const failedPages: string[] = []; // 用于记录第一轮失败的页面
+
     console.log(`[SyncAllPages] 🚦 开始批量同步，总计 ${total} 个页面`);
 
-    // 串行同步每个页面
+    // 第一轮：串行同步每个页面
     for (let index = 0; index < total; index++) {
       const pageTitle = oldPageList[index];
       const current = index + 1;
@@ -127,6 +129,7 @@ async function syncPages(oldSite: Mwn, newSite: Mwn): Promise<void> {
       // 更新统计
       if (!syncResult.success) {
         failCount++;
+        failedPages.push(pageTitle); // 记录失败的标题
         await sleep(CONFIG.SYNC_INTERVAL_FAILED);
       } else {
         successCount++;
@@ -140,8 +143,56 @@ async function syncPages(oldSite: Mwn, newSite: Mwn): Promise<void> {
       }
     }
 
+    // 第二轮：重试失败的页面
+    if (failedPages.length > 0) {
+      console.log(
+        `\n[SyncAllPages] 🔄 ===== 开始重试 ${failedPages.length} 个失败页面 =====`,
+      );
+
+      const stillFailed: string[] = [];
+
+      for (const pageTitle of failedPages) {
+        console.log(`\n[SyncAllPages] 🔁 重试中: ${pageTitle}`);
+
+        const syncResult = await syncSinglePage(
+          oldSite,
+          newSite,
+          pageTitle,
+          "同步坤器人",
+        );
+
+        if (syncResult.success) {
+          successCount++;
+          failCount--; // 修正统计数据
+          if (
+            syncResult.reason === "ignored" ||
+            syncResult.reason === "no_change"
+          ) {
+            skipCount++;
+          }
+          console.log(`[SyncAllPages] ✅ 页面 ${pageTitle} 重试成功`);
+          await sleep(CONFIG.SYNC_INTERVAL_SUCCESS);
+        } else {
+          stillFailed.push(pageTitle);
+          console.log(`[SyncAllPages] ❌ 页面 ${pageTitle} 再次失败`);
+          await sleep(CONFIG.SYNC_INTERVAL_FAILED);
+        }
+      }
+
+      // 最终汇总报告
+      console.log(`\n[SyncAllPages] 📋 ===== 最终同步报告 =====`);
+      if (stillFailed.length > 0) {
+        console.log(`❌ 以下页面经过重试仍然失败，请手动检查：`);
+        stillFailed.forEach((title, idx) => {
+          console.log(`  ${idx + 1}. ${title}`);
+        });
+      } else {
+        console.log(`🎉 所有页面同步成功（含重试）！`);
+      }
+    }
+
     // 汇总结果
-    console.log(`\n[SyncAllPages] 🎯 同步完成！`);
+    console.log(`\n[SyncAllPages] 🎯 同步流程结束！`);
     console.log(`├─ 总计：${total} 个页面`);
     console.log(`├─ 成功：${successCount} 个（含跳过 ${skipCount} 个）`);
     console.log(`└─ 失败：${failCount} 个`);
