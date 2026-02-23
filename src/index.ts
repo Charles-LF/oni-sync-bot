@@ -6,6 +6,7 @@ import { login } from "./utils/login";
 import { getSitesConfig } from "./config";
 import { syncPages, syncSinglePage } from "./sync/pageSync";
 import { syncModules, syncSingleModule } from "./sync/moduleSync";
+import { syncAllImages, syncSingleImage } from "./sync/imgSync";
 
 export const name = "oni-sync-bot";
 export const inject = ["console", "database"];
@@ -122,6 +123,39 @@ export function apply(ctx: Context, config: Config) {
         })
         .catch((err) => {
           session.send(`❌ 同步所有模块失败，错误信息：${err}`);
+        });
+    });
+  // #endregion
+  // #region 同步单个图片
+  ctx
+    .command("sync.img <imgTitle:string>", "同步指定图片", { authority: 2 })
+    .action(async ({ session }, imgTitle) => {
+      await syncSingleImage(
+        ggbot,
+        huijibot,
+        `${imgTitle.startsWith("File:") ? "" : "File:"}${imgTitle}`,
+        config,
+      )
+        .then(() => {
+          session.send(`✅ 已尝试同步图片：${imgTitle}`);
+        })
+        .catch((err) => {
+          session.send(`❌ 同步图片失败：${imgTitle}，错误信息：${err}`);
+        });
+    });
+  //#endregion
+
+  // #region 同步所有图片
+  ctx
+    .command("sync.allimgs", "同步所有图片", { authority: 2 })
+    .action(async ({ session }) => {
+      session.send(`🚀 开始同步所有图片，任务耗时较长，请耐心等待...`);
+      await syncAllImages(ggbot, huijibot, config)
+        .then(() => {
+          session.send(`✅ 已尝试同步所有图片，从 WIKIGG 到 灰机wiki`);
+        })
+        .catch((err) => {
+          session.send(`❌ 同步所有图片失败，错误信息：${err}`);
         });
     });
   // #endregion
