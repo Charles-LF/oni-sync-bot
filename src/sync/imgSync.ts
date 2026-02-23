@@ -67,7 +67,7 @@ async function getImageInfo(
 }
 
 /**
- * 同步单个图片（使用 rawRequest 修复 JSON 解析问题）
+ * 同步单个图片
  */
 async function syncSingleImage(
   sourceBot: Mwn,
@@ -83,21 +83,21 @@ async function syncSingleImage(
   try {
     console.log(`[SyncImg] 🚀 开始处理: ${fileName}`);
 
-    // 1. 获取源站图片信息
+    // 获取源站图片信息
     const sourceImageInfo = await getImageInfo(sourceBot, fileName);
     if (!sourceImageInfo) {
       console.log(`[SyncImg] ❌ 源站未找到图片: ${fileName}`);
       return { success: false, reason: "source_missing" };
     }
 
-    // 2. 哈希校验
+    // 哈希校验
     const targetImageInfo = await getImageInfo(targetBot, fileName);
     if (targetImageInfo && targetImageInfo.sha1 === sourceImageInfo.sha1) {
       console.log(`[SyncImg] 🟡 图片 ${fileName} 已存在且内容一致，跳过`);
       return { success: true, reason: "no_change" };
     }
 
-    // 3. 下载图片到内存
+    // 下载图片到内存
     console.log(`[SyncImg] 📥 下载图片: ${sourceImageInfo.url}`);
     const imageResponse = await fetch(sourceImageInfo.url, {
       headers: {
@@ -114,7 +114,6 @@ async function syncSingleImage(
       `[SyncImg] 📤 上传图片: ${fileName} (大小: ${(imageBuffer.length / 1024).toFixed(1)} KB)`,
     );
 
-    // 4. 核心修复：使用 rawRequest + FormData
     const token = await targetBot.getCsrfToken();
     const form = new FormData();
 
@@ -132,7 +131,6 @@ async function syncSingleImage(
         imageResponse.headers.get("content-type") || "application/octet-stream",
     });
 
-    // 使用 rawRequest，完全手动控制
     const rawResponse = await targetBot.rawRequest({
       method: "POST",
       url: targetBot.options.apiUrl as string,
@@ -143,7 +141,6 @@ async function syncSingleImage(
       },
     });
 
-    // 手动解析响应
     const responseData = rawResponse.data;
     if (responseData.upload && responseData.upload.result === "Success") {
       console.log(`[SyncImg] ✅ 图片 ${fileName} 同步成功`);
