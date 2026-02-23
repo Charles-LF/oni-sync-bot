@@ -1,7 +1,12 @@
 import { Mwn } from "mwn";
-import { ISiteConfig } from "../siteConfig";
+import { ISiteConfig } from "../config";
 import type { RawRequestParams } from "mwn/build/core";
 
+/**
+ * 登录机器人
+ * @param siteConfig 站点配置
+ * @returns 机器人实例
+ */
 export async function login(siteConfig: ISiteConfig): Promise<Mwn> {
   const bot = new Mwn({
     apiUrl: siteConfig.api,

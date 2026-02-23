@@ -2,8 +2,10 @@ import { Context, Schema } from "koishi";
 import { resolve } from "path";
 import { DataService } from "@koishijs/plugin-console";
 import { Mwn } from "mwn";
-import { login } from "./core/login";
-import { getSitesConfig } from "./siteConfig";
+import { login } from "./utils/login";
+import { getSitesConfig } from "./config";
+import { syncPages, syncSinglePage } from "./sync/pageSync";
+import { syncModules, syncSingleModule } from "./sync/moduleSync";
 
 export const name = "oni-sync-bot";
 export const inject = ["console", "database"];
@@ -52,5 +54,75 @@ export function apply(ctx: Context, config: Config) {
     const sitesConfig = getSitesConfig(config);
     ggbot = await login(sitesConfig.gg);
     huijibot = await login(sitesConfig.huiji);
+    if (ggbot.login && huijibot.login) {
+      logger.info("登录成功，插件已准备就绪");
+    } else {
+      logger.error("登录失败，请检查配置");
+    }
   });
+
+  // 指令
+  //#region 同步单个页面
+  ctx
+    .command("sync <pageTitle:string>", "同步指定页面", { authority: 2 })
+    .action(async ({ session }, pageTitle) => {
+      await syncSinglePage(ggbot, huijibot, pageTitle, "sync-bot")
+        .then(() => {
+          session.send(
+            `✅ 已尝试同步页面：${pageTitle}，从 WIKIGG 到 灰机wiki`,
+          );
+        })
+        .catch((err) => {
+          session.send(`❌ 同步页面失败：${pageTitle}，错误信息：${err}`);
+        });
+    });
+  // #endregion
+
+  //#region 同步所有页面
+  ctx
+    .command("sync.allpages", "同步所有页面", { authority: 2 })
+    .action(async ({ session }) => {
+      session.send(`🚀 开始同步所有页面，任务耗时较长，请耐心等待...`);
+      await syncPages(ggbot, huijibot)
+        .then(() => {
+          session.send(`✅ 已尝试同步所有页面，从 WIKIGG 到 灰机wiki`);
+        })
+        .catch((err) => {
+          session.send(`❌ 同步所有页面失败，错误信息：${err}`);
+        });
+    });
+  // #endregion
+
+  //#region 同步单个模块
+  ctx
+    .command("sync.module <moduleTitle:string>", "同步指定模块", {
+      authority: 2,
+    })
+    .action(async ({ session }, moduleTitle) => {
+      await syncSingleModule(ggbot, huijibot, moduleTitle, "sync-bot")
+        .then(() => {
+          session.send(
+            `✅ 已尝试同步模块：${moduleTitle}，从 WIKIGG 到 灰机wiki`,
+          );
+        })
+        .catch((err) => {
+          session.send(`❌ 同步模块失败：${moduleTitle}，错误信息：${err}`);
+        });
+    });
+  // #endregion
+
+  //#region 同步所有模块q
+  ctx
+    .command("sync.allmodules", "同步所有模块", { authority: 2 })
+    .action(async ({ session }) => {
+      session.send(`🚀 开始同步所有模块，任务耗时较长，请耐心等待...`);
+      await syncModules(ggbot, huijibot)
+        .then(() => {
+          session.send(`✅ 已尝试同步所有模块，从 WIKIGG 到 灰机wiki`);
+        })
+        .catch((err) => {
+          session.send(`❌ 同步所有模块失败，错误信息：${err}`);
+        });
+    });
+  // #endregion
 }

@@ -1,4 +1,4 @@
-import { Config } from "./index";
+import { Config } from "../index";
 
 // 站点配置
 const userAgent = `OniSyncBot/1.0 (https://klei.vip; Charles@klei.vip)`;
