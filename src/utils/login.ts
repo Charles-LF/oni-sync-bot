@@ -1,6 +1,8 @@
 import { Mwn } from "mwn";
 import { ISiteConfig } from "../config";
 import type { RawRequestParams } from "mwn/build/core";
+import { Logger } from "koishi";
+import { logger } from "./tools";
 
 /**
  * 登录机器人
@@ -31,6 +33,6 @@ export async function login(siteConfig: ISiteConfig): Promise<Mwn> {
   bot.setRequestOptions(customRequestOptions);
   await bot.login();
 
-  console.log(`✅ 成功登录 ${siteConfig.name}`);
+  logger.info(`✅ 成功登录 ${siteConfig.name}`);
   return bot;
 }

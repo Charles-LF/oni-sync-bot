@@ -1,3 +1,4 @@
+import { Logger } from "koishi";
 import { Mwn } from "mwn";
 import { pinyin } from "pinyin-pro";
 
@@ -77,4 +78,6 @@ function generatePinyinInfo(text: string): {
   };
 }
 
-export { getAndProcessPageContent, generatePinyinInfo };
+const logger = new Logger("oni-sync");
+
+export { getAndProcessPageContent, generatePinyinInfo, logger };

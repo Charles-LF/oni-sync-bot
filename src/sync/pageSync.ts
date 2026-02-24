@@ -1,6 +1,6 @@
 import { Mwn } from "mwn";
 import { Config } from "../index";
-import { getAndProcessPageContent } from "../utils/tools";
+import { getAndProcessPageContent, logger } from "../utils/tools";
 import { sleep } from "koishi";
 import { syncSingleImage } from "./imgSync";
 
@@ -33,12 +33,12 @@ async function syncSinglePage(
   reason: string;
 }> {
   if (CONFIG.IGNORED_PAGES.has(pageTitle)) {
-    console.log(`[syncSinglePage] 🚫 页面 ${pageTitle} 在忽略列表中，跳过`);
+    logger.info(`[syncSinglePage] 🚫 页面 ${pageTitle} 在忽略列表中，跳过`);
     return { success: true, reason: "ignored" };
   }
 
   try {
-    console.log(`[syncSinglePage] 🚀 开始同步页面: ${pageTitle}`);
+    logger.info(`[syncSinglePage] 🚀 开始同步页面: ${pageTitle}`);
 
     const [oldContent, newContent] = await Promise.all([
       getAndProcessPageContent(oldSite, pageTitle),
@@ -46,16 +46,16 @@ async function syncSinglePage(
     ]);
 
     if (oldContent === newContent) {
-      console.log(`[syncSinglePage] 🟡 页面 ${pageTitle} 内容未改变，跳过`);
+      logger.info(`[syncSinglePage] 🟡 页面 ${pageTitle} 内容未改变，跳过`);
       return { success: true, reason: "no_change" };
     }
 
     await newSite.save(pageTitle, oldContent, `由：${user} 触发更改，此时同步`);
-    console.log(`[syncSinglePage] ✅ 页面 ${pageTitle} 同步成功`);
+    logger.info(`[syncSinglePage] ✅ 页面 ${pageTitle} 同步成功`);
     return { success: true, reason: "synced" };
   } catch (error) {
     const errMsg = error instanceof Error ? error.message : String(error);
-    console.error(`[syncSinglePage] ❌ 页面 ${pageTitle} 同步失败:`, errMsg);
+    logger.error(`[syncSinglePage] ❌ 页面 ${pageTitle} 同步失败:`, errMsg);
     return { success: false, reason: errMsg };
   }
 }
@@ -66,7 +66,7 @@ async function syncSinglePage(
  * @returns 页面名称列表
  */
 async function getAllPages(site: Mwn): Promise<string[]> {
-  console.log(
+  logger.info(
     `[SyncAllPages] 📥 开始获取原站点所有页面（命名空间${CONFIG.NAMESPACE}）`,
   );
 
@@ -82,10 +82,10 @@ async function getAllPages(site: Mwn): Promise<string[]> {
   for await (const res of queryGen) {
     const pageTitles = res.query?.allpages?.map((page) => page.title) || [];
     allPages.push(...pageTitles);
-    console.log(`[SyncAllPages] 📄 已获取 ${allPages.length} 个页面`);
+    logger.info(`[SyncAllPages] 📄 已获取 ${allPages.length} 个页面`);
   }
 
-  console.log(`[SyncAllPages] 📊 原站点总计获取到 ${allPages.length} 个页面`);
+  logger.info(`[SyncAllPages] 📊 原站点总计获取到 ${allPages.length} 个页面`);
   return allPages;
 }
 
@@ -120,7 +120,7 @@ function printProgress(
 ): void {
   const progress = ((current / total) * 100).toFixed(1);
   const remaining = total - current;
-  console.log(
+  logger.info(
     `\n[SyncAllPages] 📈 进度 [${current}/${total}] (${progress}%) - 处理 ${pageTitle} | 剩余 ${remaining} 个`,
   );
 }
@@ -132,20 +132,20 @@ function printFinalReport(
   skipCount: number,
   stillFailed: string[],
 ): void {
-  console.log(`\n[SyncAllPages] 📋 ===== 最终同步报告 =====`);
+  logger.info(`\n[SyncAllPages] 📋 ===== 最终同步报告 =====`);
   if (stillFailed.length > 0) {
-    console.log(`❌ 以下页面经过重试仍然失败，请手动检查：`);
+    logger.info(`❌ 以下页面经过重试仍然失败，请手动检查：`);
     stillFailed.forEach((title, idx) => {
-      console.log(`  ${idx + 1}. ${title}`);
+      logger.info(`  ${idx + 1}. ${title}`);
     });
   } else {
-    console.log(`🎉 所有页面同步成功（含重试）！`);
+    logger.info(`🎉 所有页面同步成功（含重试）！`);
   }
 
-  console.log(`\n[SyncAllPages] 🎯 同步流程结束！`);
-  console.log(`├─ 总计：${total} 个页面`);
-  console.log(`├─ 成功：${successCount} 个（含跳过 ${skipCount} 个）`);
-  console.log(`└─ 失败：${failCount} 个`);
+  logger.info(`\n[SyncAllPages] 🎯 同步流程结束！`);
+  logger.info(`├─ 总计：${total} 个页面`);
+  logger.info(`├─ 成功：${successCount} 个（含跳过 ${skipCount} 个）`);
+  logger.info(`└─ 失败：${failCount} 个`);
 }
 
 /**
@@ -160,14 +160,14 @@ async function syncPages(oldSite: Mwn, newSite: Mwn): Promise<void> {
     const total = oldPageList.length;
 
     if (total === 0) {
-      console.log(`[SyncAllPages] 📭 原站点无页面可同步，结束`);
+      logger.info(`[SyncAllPages] 📭 原站点无页面可同步，结束`);
       return;
     }
 
     const stats = { successCount: 0, failCount: 0, skipCount: 0 };
     const failedPages: string[] = [];
 
-    console.log(`[SyncAllPages] 🚦 开始批量同步，总计 ${total} 个页面`);
+    logger.info(`[SyncAllPages] 🚦 开始批量同步，总计 ${total} 个页面`);
 
     // 第一轮同步
     for (let index = 0; index < total; index++) {
@@ -186,12 +186,12 @@ async function syncPages(oldSite: Mwn, newSite: Mwn): Promise<void> {
     // 第二轮重试
     let stillFailed: string[] = [];
     if (failedPages.length > 0) {
-      console.log(
+      logger.info(
         `\n[SyncAllPages] 🔄 ===== 开始重试 ${failedPages.length} 个失败页面 =====`,
       );
 
       for (const pageTitle of failedPages) {
-        console.log(`\n[SyncAllPages] 🔁 重试中: ${pageTitle}`);
+        logger.info(`\n[SyncAllPages] 🔁 重试中: ${pageTitle}`);
         const syncResult = await syncSinglePage(
           oldSite,
           newSite,
@@ -208,11 +208,11 @@ async function syncPages(oldSite: Mwn, newSite: Mwn): Promise<void> {
           ) {
             stats.skipCount++;
           }
-          console.log(`[SyncAllPages] ✅ 页面 ${pageTitle} 重试成功`);
+          logger.info(`[SyncAllPages] ✅ 页面 ${pageTitle} 重试成功`);
           await sleep(CONFIG.SYNC_INTERVAL_SUCCESS);
         } else {
           stillFailed.push(pageTitle);
-          console.log(`[SyncAllPages] ❌ 页面 ${pageTitle} 再次失败`);
+          logger.info(`[SyncAllPages] ❌ 页面 ${pageTitle} 再次失败`);
           await sleep(CONFIG.SYNC_INTERVAL_FAILED);
         }
       }
@@ -226,7 +226,7 @@ async function syncPages(oldSite: Mwn, newSite: Mwn): Promise<void> {
       stillFailed,
     );
   } catch (globalError) {
-    console.error(`[SyncAllPages] 💥 批量同步流程异常终止:`, globalError);
+    logger.error(`[SyncAllPages] 💥 批量同步流程异常终止:`, globalError);
     throw globalError;
   }
 }
@@ -245,7 +245,7 @@ async function incrementalUpdate(
   try {
     const now = new Date();
     const threeHoursAgo = new Date(now.getTime() - 3 * 60 * 60 * 1000);
-    console.log(
+    logger.info(
       `[增量更新流程] ⏰ 开始处理 ${threeHoursAgo.toISOString()} 到 ${now.toISOString()} 的更新...`,
     );
 
@@ -270,14 +270,14 @@ async function incrementalUpdate(
 
         // 检查是否已处理过
         if (processedTitles.has(title)) {
-          console.log(`[增量更新流程] ⏭️  已经处理过 ${title}, 跳过`);
+          logger.info(`[增量更新流程] ⏭️  已经处理过 ${title}, 跳过`);
           totalSkipped++;
           continue;
         }
 
         // 检查是否在忽略列表中
         if (CONFIG.IGNORED_PAGES.has(title)) {
-          console.log(
+          logger.info(
             `[增量更新流程] 🚫 ${title} 在无需处理的页面列表中, 跳过`,
           );
           processedTitles.add(title);
@@ -292,7 +292,7 @@ async function incrementalUpdate(
           // 检查是否为图片页面
           if (title.startsWith(CONFIG.FILE_NAMESPACE_PREFIX)) {
             const fileName = title.replace(CONFIG.FILE_NAMESPACE_PREFIX, "");
-            console.log(
+            logger.info(
               `[增量更新流程] 🖼️  检查到图片: ${title}，正在尝试转存`,
             );
             await syncSingleImage(oldSite, newSite, fileName, config);
@@ -309,17 +309,17 @@ async function incrementalUpdate(
           await sleep(CONFIG.SYNC_INTERVAL_SUCCESS);
         } catch (error) {
           const errMsg = error instanceof Error ? error.message : String(error);
-          console.error(`[增量更新流程] ❌ 处理 ${title} 时出错:`, errMsg);
+          logger.error(`[增量更新流程] ❌ 处理 ${title} 时出错:`, errMsg);
           await sleep(CONFIG.SYNC_INTERVAL_FAILED);
         }
       }
     }
 
-    console.log(
+    logger.info(
       `[增量更新流程] ✅ 增量更新完成！处理: ${totalProcessed}, 跳过: ${totalSkipped}`,
     );
   } catch (globalError) {
-    console.error(`[增量更新流程] 💥 增量更新流程异常终止:`, globalError);
+    logger.error(`[增量更新流程] 💥 增量更新流程异常终止:`, globalError);
     throw globalError;
   }
 }
