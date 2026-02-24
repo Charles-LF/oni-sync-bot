@@ -10,6 +10,6 @@
   </k-layout>
 </template>
 
-<script lang="ts">
+<script lang="ts" setup>
 import { store } from '@koishijs/client'
 </script>
