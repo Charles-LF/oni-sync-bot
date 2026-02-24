@@ -7,7 +7,6 @@ export default (ctx: Context) => {
   ctx.page({
     name: "同步机器人",
     path: "/syncbot",
-    // fields: ["wikiDatapush"],
     component: Page,
   });
 };

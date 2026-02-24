@@ -3,16 +3,7 @@
     <k-card>
       <k-card-content>
         <p>
-          This bot is responsible for syncing the Oni database with the latest
-          data from the game. It runs every hour and updates the database with
-          any new information it finds.
-        </p>
-        <p>
-          If you have any questions or issues with the bot, please contact the
-          developers.
-        </p>
-        <p>
-          {{ 1 }}
+          这是想写却不知道咋写的页面
         </p>
       </k-card-content>
     </k-card>
