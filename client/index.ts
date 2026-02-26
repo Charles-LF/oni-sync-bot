@@ -6,7 +6,7 @@ import "virtual:uno.css";
 export default (ctx: Context) => {
   ctx.page({
     name: "同步机器人",
-    path: "/syncbot",
+    path: "/onilogs",
     component: Page,
   });
 };

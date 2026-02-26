@@ -34,7 +34,7 @@ import { getSitesConfig } from "./config";
 import { incrementalUpdate, syncPages, syncSinglePage } from "./sync/pageSync";
 import { syncModules, syncSingleModule } from "./sync/moduleSync";
 import { syncAllImages, syncSingleImage } from "./sync/imgSync";
-import { generatePinyinInfo } from "./utils/tools";
+import { generatePinyinInfo, logger } from "./utils/tools";
 
 export const name = "oni-sync-bot";
 export const inject = ["console", "database", "server", "cron"];
@@ -61,6 +61,7 @@ export interface Config {
   domain: string;
   main_site: string;
   mirror_site: string;
+  logsUrl: string;
 }
 
 export const Config: Schema<Config> = Schema.object({
@@ -88,10 +89,12 @@ export const Config: Schema<Config> = Schema.object({
   mirror_site: Schema.string()
     .description("镜像站域名（必填，如：wiki.biligame.com）")
     .default("wiki.biligame.com/oni"),
+  logsUrl: Schema.string()
+    .description("日志查看地址")
+    .default("htts://klei.vip/onilogs"),
 });
 
 export function apply(ctx: Context, config: Config) {
-  const logger = ctx.logger("oni-sync-bot");
   let ggbot: Mwn;
   let huijibot: Mwn;
   // 注入控制台
@@ -189,7 +192,7 @@ export function apply(ctx: Context, config: Config) {
       await syncSinglePage(ggbot, huijibot, pageTitle, "sync-bot")
         .then(() => {
           session.send(
-            `✅ 已尝试同步页面：${pageTitle}，从 WIKIGG 到 灰机wiki`,
+            `✅ 已尝试同步页面：${pageTitle}，请前往控制台查看：${config.logsUrl}`,
           );
         })
         .catch((err) => {
@@ -200,14 +203,18 @@ export function apply(ctx: Context, config: Config) {
 
   // #region 指令：增量更新
   ctx
-    .command("sync.incrementalUpdate", "同步所有页面", { authority: 2 })
+    .command("sync.incrementalUpdate", "获取3h内的编辑并尝试更新", {
+      authority: 2,
+    })
     .alias("增量更新")
     .action(async ({ session }) => {
-      session.send(`🚀 开始同步所有页面，任务耗时可能较长，请耐心等待...`);
+      session.send(
+        `🚀 获取3h内的编辑并尝试更新，任务耗时可能较长，请前往控制台查看日志:${config.logsUrl}`,
+      );
       await incrementalUpdate(ggbot, huijibot, config)
         .then(() => {
           session.send(
-            `✅ 已尝试获取三小时前的编辑并同步，从 WIKIGG 到 灰机wiki`,
+            `✅ 已尝试获取三小时前的编辑并同步，请前往控制台查看：${config.logsUrl}`,
           );
         })
         .catch((err) => {
@@ -220,10 +227,14 @@ export function apply(ctx: Context, config: Config) {
   ctx
     .command("sync.allpages", "同步所有页面", { authority: 2 })
     .action(async ({ session }) => {
-      session.send(`🚀 开始同步所有页面，任务耗时较长，请耐心等待...`);
+      session.send(
+        `🚀 开始同步所有页面，任务耗时较长，请前往控制台查看日志:${config.logsUrl}`,
+      );
       await syncPages(ggbot, huijibot)
         .then(() => {
-          session.send(`✅ 已尝试同步所有页面，从 WIKIGG 到 灰机wiki`);
+          session.send(
+            `✅ 已尝试同步所有页面，请前往控制台查看：${config.logsUrl}`,
+          );
         })
         .catch((err) => {
           session.send(`❌ 同步所有页面失败，错误信息：${err}`);
@@ -237,10 +248,11 @@ export function apply(ctx: Context, config: Config) {
       authority: 2,
     })
     .action(async ({ session }, moduleTitle) => {
+      await session.send(`✅ 同步中，请前往控制台查看：${config.logsUrl}`);
       await syncSingleModule(ggbot, huijibot, moduleTitle, "sync-bot")
         .then(() => {
           session.send(
-            `✅ 已尝试同步模块：${moduleTitle}，从 WIKIGG 到 灰机wiki`,
+            `✅ 已尝试同步模块：${moduleTitle}，请前往控制台查看：${config.logsUrl}`,
           );
         })
         .catch((err) => {
@@ -253,10 +265,14 @@ export function apply(ctx: Context, config: Config) {
   ctx
     .command("sync.allmodules", "同步所有模块", { authority: 2 })
     .action(async ({ session }) => {
-      session.send(`🚀 开始同步所有模块，任务耗时较长，请耐心等待...`);
+      await session.send(
+        `🚀 开始同步所有模块，任务耗时较长，请前往控制台查看：${config.logsUrl}`,
+      );
       await syncModules(ggbot, huijibot)
         .then(() => {
-          session.send(`✅ 已尝试同步所有模块，从 WIKIGG 到 灰机wiki`);
+          session.send(
+            `✅ 已尝试同步所有模块，请前往控制台查看：${config.logsUrl}`,
+          );
         })
         .catch((err) => {
           session.send(`❌ 同步所有模块失败，错误信息：${err}`);
@@ -268,6 +284,9 @@ export function apply(ctx: Context, config: Config) {
   ctx
     .command("sync.img <imgTitle:string>", "同步指定图片", { authority: 2 })
     .action(async ({ session }, imgTitle) => {
+      await session.send(
+        `🚀 开始同步，任务可能耗时较长，请前往控制台查看：${config.logsUrl}`,
+      );
       await syncSingleImage(
         ggbot,
         huijibot,
@@ -287,10 +306,14 @@ export function apply(ctx: Context, config: Config) {
   ctx
     .command("sync.allimgs", "同步所有图片", { authority: 2 })
     .action(async ({ session }) => {
-      session.send(`🚀 开始同步所有图片，任务耗时较长，请耐心等待...`);
+      session.send(
+        `🚀 开始同步所有图片，任务耗时较长，请前往控制台查看：${config.logsUrl}`,
+      );
       await syncAllImages(ggbot, huijibot, config)
         .then(() => {
-          session.send(`✅ 已尝试同步所有图片，从 WIKIGG 到 灰机wiki`);
+          session.send(
+            `✅ 已尝试同步所有图片，请前往控制台查看：${config.logsUrl}`,
+          );
         })
         .catch((err) => {
           session.send(`❌ 同步所有图片失败，错误信息：${err}`);
