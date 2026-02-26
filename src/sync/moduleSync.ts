@@ -29,17 +29,31 @@ async function syncSingleModule(
   }
   try {
     logger.info(`[SyncModule] 🔍 开始获取模块 ${moduleTitle} 的内容`);
+    let targetTitle = moduleTitle;
+    if (/^Dev:/i.test(moduleTitle)) {
+      // 截取 "Dev:" 后面的部分
+      // 例如 "Dev:Arguments" -> "Arguments"
+      const subPageName = moduleTitle.replace(/^Dev:/i, "");
+
+      // 拼接成新的目标标题
+      // 例如 "Arguments" -> "Module:Dev/Arguments"
+      targetTitle = `Module:Dev/${subPageName}`;
+
+      logger.info(
+        `[SyncModule] 🔀 检测到 Dev 命名空间，路径映射: ${moduleTitle} -> ${targetTitle}`,
+      );
+    }
     // 获取模块内容
     const [oldContent, newContent] = await Promise.all([
       getAndProcessPageContent(oldSite, moduleTitle),
-      getAndProcessPageContent(newSite, moduleTitle),
+      getAndProcessPageContent(newSite, targetTitle),
     ]);
     if (oldContent === newContent) {
       logger.info(`[SyncModule] 🟡 模块 ${moduleTitle} 内容未改变，跳过`);
       return { success: true, reason: "no_change" };
     }
     await newSite.save(
-      moduleTitle,
+      targetTitle,
       oldContent,
       `由：${user || "同步坤器人手动"} 触发更改，此时同步`,
     );
@@ -93,7 +107,7 @@ async function syncModules(oldSite: Mwn, newSite: Mwn): Promise<void> {
     // 获取原站点所有页面
     const oldModuleList = await getAllModules(oldSite);
     const total = oldModuleList.length;
-
+    console.log(oldModuleList);
     if (total === 0) {
       logger.info(`[SyncAllModules] 📭 原站点无模块可同步，结束`);
       return;

@@ -4,9 +4,8 @@ import { pinyin } from "pinyin-pro";
 
 // 常量定义
 const CROSS_SITE_LINK_REGEX: RegExp = /\[\[(en|ru|pt-br):[^\]]*\]\]/g; // 跨站链接正则
-// const DEV_TEXT_REGEX: RegExp = /Dev:/g; // 匹配所有 Dev: 字符串的全局正则
-// const DEV_NAMESPACE_PREFIX = "Dev:"; // Dev命名空间前缀
-// const MODULE_NAMESPACE_PREFIX = "Module:Dev/"; // 目标替换前缀
+const DEV_TEXT_REGEX: RegExp = /Dev:/g; // 匹配所有 Dev: 字符串的全局正则
+const MODULE_NAMESPACE_PREFIX = "Module:Dev/"; // 目标替换前缀
 
 /**
  * 移除跨站链接 + 替换所有 Dev: 为 Module:Dev/
@@ -15,11 +14,11 @@ const CROSS_SITE_LINK_REGEX: RegExp = /\[\[(en|ru|pt-br):[^\]]*\]\]/g; // 跨站
  */
 function clean_page_text(text: string): string {
   const textWithoutCrossLink = text.replace(CROSS_SITE_LINK_REGEX, "");
-  // const textWithReplacedDev = textWithoutCrossLink.replace(
-  //   DEV_TEXT_REGEX,
-  //   MODULE_NAMESPACE_PREFIX,
-  // );
-  return textWithoutCrossLink;
+  const textWithReplacedDev = textWithoutCrossLink.replace(
+    DEV_TEXT_REGEX,
+    MODULE_NAMESPACE_PREFIX,
+  );
+  return textWithReplacedDev;
 }
 
 /**
