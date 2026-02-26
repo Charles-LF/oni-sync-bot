@@ -23,7 +23,7 @@
 //          本来无BUG            何必常修改
 //                  佛曰: 能跑就行
 
-import { Context, Schema } from "koishi";
+import { Context, Logger, Schema } from "koishi";
 import { resolve } from "path";
 import { DataService } from "@koishijs/plugin-console";
 import {} from "@koishijs/plugin-server";
@@ -38,7 +38,15 @@ import { generatePinyinInfo, logger } from "./utils/tools";
 
 export const name = "oni-sync-bot";
 export const inject = ["console", "database", "server", "cron"];
+let logBuffer: Logger.Record[] = []; // 用于缓存日志
 
+declare module "@koishijs/console" {
+  namespace Console {
+    interface Services {
+      onilogs: DataService<Logger.Record[]>;
+    }
+  }
+}
 // 扩展数据库声明，新增拼音和首字母字段
 declare module "koishi" {
   interface Tables {
@@ -91,8 +99,19 @@ export const Config: Schema<Config> = Schema.object({
     .default("wiki.biligame.com/oni"),
   logsUrl: Schema.string()
     .description("日志查看地址")
-    .default("htts://klei.vip/onilogs"),
+    .default("https://klei.vip/onilogs"),
 });
+
+// 自定义数据服务：权限设为 0
+class PublicLogProvider extends DataService<Logger.Record[]> {
+  constructor(ctx: Context) {
+    super(ctx, "onilogs", { authority: 0 });
+  }
+  async get() {
+    // 返回当前缓存的日志
+    return logBuffer;
+  }
+}
 
 export function apply(ctx: Context, config: Config) {
   let ggbot: Mwn;
@@ -103,6 +122,33 @@ export function apply(ctx: Context, config: Config) {
       dev: resolve(__dirname, "../client/index.ts"),
       prod: resolve(__dirname, "../dist"),
     });
+  });
+  // 启动自定义数据服务
+  ctx.plugin(PublicLogProvider);
+
+  // 监听全局日志事件
+  const target: Logger.Target = {
+    colors: 0,
+    record: (record) => {
+      if (record.name !== "oni-sync") return;
+
+      logBuffer.push(record);
+      // 保留最新 100 条
+      if (logBuffer.length > 100) {
+        logBuffer = logBuffer.slice(-100);
+      }
+
+      // 主动推送给前端
+      ctx.get("console")?.patch("onilogs", logBuffer);
+    },
+  };
+
+  Logger.targets.push(target);
+
+  ctx.on("dispose", () => {
+    // 清理
+    const index = Logger.targets.indexOf(target);
+    if (index > -1) Logger.targets.splice(index, 1);
   });
 
   // 扩展数据库表

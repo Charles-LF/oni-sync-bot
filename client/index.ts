@@ -8,5 +8,6 @@ export default (ctx: Context) => {
     name: "同步机器人",
     path: "/onilogs",
     component: Page,
+    fields: ["onilogs"],
   });
 };
