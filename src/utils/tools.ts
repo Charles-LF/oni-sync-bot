@@ -4,7 +4,7 @@ import { pinyin } from "pinyin-pro";
 
 // 常量定义
 const CROSS_SITE_LINK_REGEX: RegExp = /\[\[(en|ru|pt-br):[^\]]*\]\]/g; // 跨站链接正则
-const DEV_TEXT_REGEX: RegExp = /Dev:/g; // 匹配所有 Dev: 字符串的全局正则
+const DEV_TEXT_REGEX: RegExp = /(?<!\w)Dev:/g; // 匹配所有 Dev: 字符串的全局正则
 const MODULE_NAMESPACE_PREFIX = "Module:Dev/"; // 目标替换前缀
 
 /**
