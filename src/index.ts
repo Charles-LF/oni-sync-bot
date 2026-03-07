@@ -68,7 +68,8 @@ export interface Config {
   huijiUAKey: string;
   domain: string;
   main_site: string;
-  mirror_site: string;
+  bwiki_site: string;
+  huiji_site: string;
   logsUrl: string;
 }
 
@@ -94,9 +95,12 @@ export const Config: Schema<Config> = Schema.object({
   main_site: Schema.string()
     .description("主站域名（必填，如：oxygennotincluded.wiki.gg）")
     .default("oxygennotincluded.wiki.gg/zh"),
-  mirror_site: Schema.string()
+  bwiki_site: Schema.string()
     .description("镜像站域名（必填，如：wiki.biligame.com）")
     .default("wiki.biligame.com/oni"),
+  huiji_site: Schema.string()
+    .description("灰机wiki域名（必填，如：oni.huijiwiki.com）")
+    .default("oni.huijiwiki.com/wiki/"),
   logsUrl: Schema.string()
     .description("日志查看地址")
     .default("https://klei.vip/onilogs"),
@@ -182,10 +186,24 @@ export function apply(ctx: Context, config: Config) {
     if (!page)
       return (router.body = `❌ 未找到ID为【${pageId}】的页面，请联系管理员更新缓存！`);
 
-    const targetUrl = `https://${config.mirror_site}/${encodeURIComponent(
+    const targetUrl = `https://${config.bwiki_site}/${encodeURIComponent(
       page.title,
     )}`;
     router.redirect(targetUrl); //重定向至wiki.biligame.com
+  });
+  // 镜像站路由：klei.vip/hj/[id] → 跳转至 oni.huijiwiki.com/wiki/[title]
+  ctx.server.get("/hj/:id", async (router) => {
+    const pageId = Number(router.params.id);
+    if (isNaN(pageId)) return (router.body = "❌ 无效的页面ID，必须为数字！");
+
+    const [page] = await ctx.database.get("wikipages", { id: pageId });
+    if (!page)
+      return (router.body = `❌ 未找到ID为【${pageId}】的页面，请联系管理员更新缓存！`);
+
+    const targetUrl = `https://${config.huiji_site}/${encodeURIComponent(
+      page.title,
+    )}`;
+    router.redirect(targetUrl); //重定向至oni.huijiwiki.com
   });
   //#endregion
 
@@ -375,7 +393,7 @@ export function apply(ctx: Context, config: Config) {
       const queryKey = itemName.trim().toLowerCase();
       // 空关键词返回使用说明，不进行查询，需要手动输入数据库ID 8个8
       if (queryKey === "")
-        return `以下是使用说明：\n原站点: https://${config.domain}/gg/88888888\n\n镜像站: https://${config.domain}/bw/88888888`;
+        return `以下是使用说明：\n原站点: https://${config.domain}/gg/88888888\n\nbwiki: https://${config.domain}/hj/88888888`;
 
       // 将用户输入的关键词转换为拼音/首字母
       const { pinyin_full: queryPinyinFull, pinyin_first: queryPinyinFirst } =
@@ -387,7 +405,7 @@ export function apply(ctx: Context, config: Config) {
       });
       if (preciseTitleRes.length > 0) {
         const { id } = preciseTitleRes[0];
-        return `✅ 精准匹配成功\n原站点: https://${config.domain}/gg/${id}\n\n镜像站: https://${config.domain}/bw/${id}`;
+        return `✅ 精准匹配成功\n原站点: https://${config.domain}/gg/${id}\n\nbwiki: https://${config.domain}/bw/${id}\n\n灰机：https://${config.domain}/hj/${id}\n\n注：bwiki将在不久后停止技术支持，镜像站点将迁移至灰机！并继续维护`;
       }
 
       // 匹配全拼
@@ -396,7 +414,7 @@ export function apply(ctx: Context, config: Config) {
       });
       if (preciseFullPinyinRes.length > 0) {
         const { id, title } = preciseFullPinyinRes[0];
-        return `✅ 拼音精准匹配成功（${queryKey} → ${title}）\n原站点: https://${config.domain}/gg/${id}\n\n镜像站: https://${config.domain}/bw/${id}`;
+        return `✅ 拼音精准匹配成功（${queryKey} → ${title}）\n原站点: https://${config.domain}/gg/${id}\n\nbwiki: https://${config.domain}/bw/${id}\n\n灰机：https://${config.domain}/hj/${id}\n\n注：bwiki将在不久后停止技术支持，镜像站点将迁移至灰机！并继续维护`;
       }
 
       // 匹配首字母
@@ -405,7 +423,7 @@ export function apply(ctx: Context, config: Config) {
       });
       if (preciseFirstPinyinRes.length > 0) {
         const { id, title } = preciseFirstPinyinRes[0];
-        return `✅ 首字母精准匹配成功（${queryKey} → ${title}）\n原站点: https://${config.domain}/gg/${id}\n\n镜像站: https://${config.domain}/bw/${id}`;
+        return `✅ 首字母精准匹配成功（${queryKey} → ${title}）\n原站点: https://${config.domain}/gg/${id}\n\nbwiki: https://${config.domain}/bw/${id}\n\n灰机：https://${config.domain}/hj/${id}\n\n注：bwiki将在不久后停止技术支持，镜像站点将迁移至灰机！并继续维护 `;
       }
 
       // 模糊匹配（标题/全拼/首字母包含关键词）
@@ -478,7 +496,7 @@ export function apply(ctx: Context, config: Config) {
       }
 
       const { id } = uniqueResult[selectNum - 1];
-      return `✅ 选择成功\n原站点: https://${config.domain}/gg/${id}\n\n镜像站: https://${config.domain}/bw/${id}`;
+      return `✅ 选择成功\n原站点: https://${config.domain}/gg/${id}\n\nbwiki: https://${config.domain}/bw/${id}\n\n灰机：https://${config.domain}/hj/${id}\n\n注：bwiki将在不久后停止技术支持，镜像站点将迁移至灰机！并继续维护`;
     });
   // #endregion
 

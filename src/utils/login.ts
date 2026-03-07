@@ -1,7 +1,6 @@
 import { Mwn } from "mwn";
 import { ISiteConfig } from "../config";
 import type { RawRequestParams } from "mwn/build/core";
-import { Logger } from "koishi";
 import { logger } from "./tools";
 
 /**
@@ -29,7 +28,6 @@ export async function login(siteConfig: ISiteConfig): Promise<Mwn> {
   if (siteConfig.uakey) {
     customRequestOptions.headers!["X-authkey"] = siteConfig.uakey;
   }
-
   bot.setRequestOptions(customRequestOptions);
   await bot.login();
 
