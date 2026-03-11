@@ -118,6 +118,7 @@ class PublicLogProvider extends DataService<Logger.Record[]> {
 }
 
 export function apply(ctx: Context, config: Config) {
+  const log = ctx.logger("oni-sync");
   let ggbot: Mwn;
   let huijibot: Mwn;
   // 注入控制台
@@ -231,7 +232,8 @@ export function apply(ctx: Context, config: Config) {
           logger.info("自动任务：尝试同步所有页面，从 WIKIGG 到 灰机wiki");
         })
         .catch((err) => {
-          logger.error(`同步所有页面失败，错误信息：${err}`);
+          logger.error(`同步所有页面失败`);
+          log.error(`，错误信息：${err}`);
         });
     });
     //#endregion
@@ -242,7 +244,8 @@ export function apply(ctx: Context, config: Config) {
           logger.info("自动任务：尝试同步所有图片，从 WIKIGG 到 灰机wiki");
         })
         .catch((err) => {
-          logger.error(`同步所有图片失败，错误信息：${err}`);
+          logger.error(`同步所有图片失败`);
+          log.error(`，错误信息：${err}`);
         });
     });
     //#endregion
@@ -260,7 +263,8 @@ export function apply(ctx: Context, config: Config) {
           );
         })
         .catch((err) => {
-          session.send(`❌ 同步页面失败：${pageTitle}，错误信息：${err}`);
+          session.send(`❌ 同步页面失败：${pageTitle}`);
+          log.error(`，错误信息：${err}`);
         });
     });
   // #endregion
@@ -282,7 +286,10 @@ export function apply(ctx: Context, config: Config) {
           );
         })
         .catch((err) => {
-          session.send(`❌ 同步所有页面失败，错误信息：${err}`);
+          session.send(
+            `❌ 同步所有页面失败，请前往控制台查看日志:${config.logsUrl}`,
+          );
+          log.error(`同步所有页面失败，错误信息：${err}`);
         });
     });
   // #endregion
@@ -301,7 +308,10 @@ export function apply(ctx: Context, config: Config) {
           );
         })
         .catch((err) => {
-          session.send(`❌ 同步所有页面失败，错误信息：${err}`);
+          session.send(
+            `❌ 同步所有页面失败，请前往控制台查看日志:${config.logsUrl}`,
+          );
+          log.error(`同步所有页面失败，错误信息：${err}`);
         });
     });
   // #endregion
@@ -320,7 +330,8 @@ export function apply(ctx: Context, config: Config) {
           );
         })
         .catch((err) => {
-          session.send(`❌ 同步模块失败：${moduleTitle}，错误信息：${err}`);
+          session.send(`❌ 同步模块失败：${moduleTitle}`);
+          log.error(`错误信息：${err}`);
         });
     });
   // #endregion
@@ -339,7 +350,10 @@ export function apply(ctx: Context, config: Config) {
           );
         })
         .catch((err) => {
-          session.send(`❌ 同步所有模块失败，错误信息：${err}`);
+          session.send(
+            `❌ 同步所有模块失败，请前往控制台查看日志:${config.logsUrl}`,
+          );
+          log.error(`同步所有模块失败，错误信息：${err}`);
         });
     });
   // #endregion
@@ -361,7 +375,8 @@ export function apply(ctx: Context, config: Config) {
           session.send(`✅ 已尝试同步图片：${imgTitle}`);
         })
         .catch((err) => {
-          session.send(`❌ 同步图片失败：${imgTitle}，错误信息：${err}`);
+          session.send(`❌ 同步图片失败：${imgTitle}`);
+          log.error(`同步图片失败：${imgTitle}，错误信息：${err}`);
         });
     });
   //#endregion
@@ -380,7 +395,10 @@ export function apply(ctx: Context, config: Config) {
           );
         })
         .catch((err) => {
-          session.send(`❌ 同步所有图片失败，错误信息：${err}`);
+          session.send(
+            `❌ 同步所有图片失败，请前往控制台查看日志:${config.logsUrl}`,
+          );
+          log.error(`同步所有图片失败，错误信息：${err}`);
         });
     });
   // #endregion
@@ -534,7 +552,7 @@ export function apply(ctx: Context, config: Config) {
         session.send(`✅ 检索到 ${pages.length} 个页面，已更新至数据库`);
         logger.info(`检索到 ${pages.length} 个页面，已更新至数据库`);
       } catch (err) {
-        logger.error("主站缓存更新失败", err);
+        log.error("主站缓存更新失败", err);
         session.send("❌ 主站缓存更新失败，请联系管理员查看日志");
       }
     });
@@ -549,7 +567,7 @@ export function apply(ctx: Context, config: Config) {
         session.send(`✅ 已删除 ${count.removed} 条本地缓存`);
         logger.info(`已删除 ${count.removed} 条本地缓存`);
       } catch (err) {
-        logger.error("删除缓存失败", err);
+        log.error("删除缓存失败", err);
         session.send("❌ 删除缓存失败，请联系管理员查看日志");
       }
     });
@@ -564,7 +582,7 @@ export function apply(ctx: Context, config: Config) {
         session.send(`📊 数据库中缓存了 ${pages.length} 条页面`);
         logger.info(`数据库中缓存了 ${pages.length} 条页面`);
       } catch (err) {
-        logger.error("查询缓存状态失败", err);
+        log.error("查询缓存状态失败", err);
         session.send("❌ 查询缓存状态失败，请联系管理员查看日志");
       }
     });
@@ -591,7 +609,7 @@ export function apply(ctx: Context, config: Config) {
         // 更新缓存
         await session.execute(`update`);
       } catch (err) {
-        logger.error(`添加重定向 ${pageName} -> ${targetPageName} 失败`, err);
+        log.error(`添加重定向 ${pageName} -> ${targetPageName} 失败`, err);
         session.send(`❌ 添加重定向失败，请联系管理员查看日志`);
       }
     });
