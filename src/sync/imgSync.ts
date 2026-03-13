@@ -123,7 +123,7 @@ async function syncSingleImage(
     form.append("text", CONFIG.UPLOAD_TEXT);
     form.append("comment", CONFIG.UPLOAD_COMMENT);
     form.append("token", token);
-    form.append("ignorewarnings", "1");
+    form.append("ignorewarnings", "0");
     form.append("format", "json");
 
     form.append("file", imageBuffer, {
