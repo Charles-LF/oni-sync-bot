@@ -1,10 +1,10 @@
 <template>
   <k-layout>
-    <div class="log-container" ref="scrollRef">
+    <k-card class="log-container" ref="scrollRef">
       <div v-for="(text, index) in displayLogs" :key="index" class="log-line">
         <pre>{{ text }}</pre>
       </div>
-    </div>
+    </k-card>
   </k-layout>
 </template>
 
