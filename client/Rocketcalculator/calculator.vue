@@ -1,191 +1,194 @@
 <template>
-    <div class="rocket-calculator sci-fi-bg">
-        <!-- 背景装饰网格 -->
-        <div class="grid-overlay"></div>
+    <k-layout class="rocket-calculator sci-fi-bg">
+        <el-scrollbar>
+            <!-- <div class="rocket-calculator sci-fi-bg"> -->
+            <!-- 背景装饰网格 -->
+            <div class="grid-overlay"></div>
 
-        <k-card class="header-card sci-fi-card">
-            <div class="header-glow"></div>
-            <h1 class="sci-fi-title">ONI ROCKET CALCULATOR</h1>
-            <p class="sci-fi-subtitle">缺氧火箭最优配置解算系统 · 基于官方物理引擎</p>
+            <k-card class="header-card sci-fi-card">
+                <div class="header-glow"></div>
+                <h1 class="sci-fi-title">ONI ROCKET CALCULATOR</h1>
+                <p class="sci-fi-subtitle">缺氧火箭最优配置解算系统 · 基于官方物理引擎</p>
 
-            <div class="content-layout">
-                <!-- 左侧：输入控制台 -->
-                <k-card class="form-card sci-fi-card">
-                    <div class="card-header-line"></div>
+                <div class="content-layout">
+                    <!-- 左侧：输入控制台 -->
+                    <k-card class="form-card sci-fi-card">
+                        <div class="card-header-line"></div>
 
-                    <!-- 主配置 -->
-                    <div class="config-section">
-                        <h3 class="section-title">【核心参数】</h3>
+                        <!-- 主配置 -->
+                        <div class="config-section">
+                            <h3 class="section-title">【核心参数】</h3>
 
-                        <el-form :model="form" size="large" class="sci-fi-form"
-                            :label-position="isMobile ? 'top' : 'right'">
-                            <el-form-item label="引擎类型">
-                                <el-select v-model="form.type" style="width: 100%" class="sci-fi-select">
-                                    <el-option label="蒸汽引擎" value="steam" />
-                                    <el-option label="石油引擎" value="oil" />
-                                    <el-option label="液氢引擎" value="hydrogen" />
-                                    <el-option label="生物柴油引擎" value="biodiesel" />
-                                </el-select>
-                            </el-form-item>
+                            <el-form :model="form" size="large" class="sci-fi-form"
+                                :label-position="isMobile ? 'top' : 'right'">
+                                <el-form-item label="引擎类型">
+                                    <el-select v-model="form.type" style="width: 100%" class="sci-fi-select">
+                                        <el-option label="蒸汽引擎" value="steam" />
+                                        <el-option label="石油引擎" value="oil" />
+                                        <el-option label="液氢引擎" value="hydrogen" />
+                                        <el-option label="生物柴油引擎" value="biodiesel" />
+                                    </el-select>
+                                </el-form-item>
 
-                            <el-form-item label="目标轨道">
-                                <div class="distance-control">
-                                    <!-- 10000km 一档的步进选择器 -->
-                                    <div class="distance-step-selector">
-                                        <el-button v-for="dist in distanceOptions" :key="dist"
-                                            :class="['step-btn', { active: form.distance === dist }]"
-                                            @click="form.distance = dist">
-                                            {{ dist / 1000 }}k
-                                        </el-button>
+                                <el-form-item label="目标轨道">
+                                    <div class="distance-control">
+                                        <!-- 10000km 一档的步进选择器 -->
+                                        <div class="distance-step-selector">
+                                            <el-button v-for="dist in distanceOptions" :key="dist"
+                                                :class="['step-btn', { active: form.distance === dist }]"
+                                                @click="form.distance = dist">
+                                                {{ dist / 1000 }}k
+                                            </el-button>
+                                        </div>
+                                        <div class="distance-input-wrapper">
+                                            <span class="distance-label">当前：</span>
+                                            <span class="distance-value">{{ form.distance.toLocaleString() }}</span>
+                                            <span class="unit">km</span>
+                                        </div>
                                     </div>
-                                    <div class="distance-input-wrapper">
-                                        <span class="distance-label">当前：</span>
-                                        <span class="distance-value">{{ form.distance.toLocaleString() }}</span>
-                                        <span class="unit">km</span>
+                                </el-form-item>
+
+                                <el-form-item label="氧化剂" v-if="form.type !== 'steam'">
+                                    <el-radio-group v-model="form.oxygenType" class="sci-fi-radio-group">
+                                        <el-radio-button label="solid">氧石</el-radio-button>
+                                        <el-radio-button label="liquid">液氧</el-radio-button>
+                                    </el-radio-group>
+                                    <div class="oxidizer-hint">
+                                        <span :class="['hint-item', { active: form.oxygenType === 'solid' }]">1.0x
+                                            效率</span>
+                                        <span :class="['hint-item', { active: form.oxygenType === 'liquid' }]">1.33x
+                                            效率</span>
+                                    </div>
+                                </el-form-item>
+                            </el-form>
+                        </div>
+
+                        <div class="divider-line"></div>
+
+                        <!-- 可选模块 -->
+                        <div class="config-section">
+                            <h3 class="section-title">【载荷配置】</h3>
+
+                            <el-form :model="form" size="large" class="modules-form"
+                                :label-position="isMobile ? 'top' : 'right'">
+                                <div class="modules-grid">
+                                    <div v-for="(label, key) in MODULE_LABELS" :key="key" class="module-item">
+                                        <div class="module-header">
+                                            <span class="module-name">{{ label }}</span>
+                                        </div>
+                                        <el-input-number v-model="form[key]" :min="0" :max="20" class="module-input" />
                                     </div>
                                 </div>
-                            </el-form-item>
 
-                            <el-form-item label="氧化剂" v-if="form.type !== 'steam'">
-                                <el-radio-group v-model="form.oxygenType" class="sci-fi-radio-group">
-                                    <el-radio-button label="solid">氧石</el-radio-button>
-                                    <el-radio-button label="liquid">液氧</el-radio-button>
-                                </el-radio-group>
-                                <div class="oxidizer-hint">
-                                    <span :class="['hint-item', { active: form.oxygenType === 'solid' }]">1.0x
-                                        效率</span>
-                                    <span :class="['hint-item', { active: form.oxygenType === 'liquid' }]">1.33x
-                                        效率</span>
+                                <el-form-item class="calculate-btn-wrapper">
+                                    <el-button @click="handleCalculate" class="sci-fi-calculate-btn">
+                                        <span class="btn-text">▶ 执行解算</span>
+                                        <span class="btn-glow"></span>
+                                    </el-button>
+                                </el-form-item>
+                            </el-form>
+                        </div>
+                    </k-card>
+
+                    <!-- 右侧：结果显示面板 -->
+                    <k-card class="result-card sci-fi-card">
+                        <div class="card-header-line"></div>
+
+                        <template v-if="!result">
+                            <div class="empty-state">
+                                <div class="scan-line"></div>
+                                <div class="empty-icon">📡</div>
+                                <p class="empty-text">等待输入参数...</p>
+                                <p class="empty-hint">请在左侧配置核心参数与载荷</p>
+                            </div>
+                        </template>
+
+                        <template v-else-if="result.length === 0">
+                            <div class="empty-state">
+                                <div class="empty-icon">⚠️</div>
+                                <p class="empty-text error">解算失败</p>
+                                <p class="empty-hint">无法找到满足条件的配置，请尝试减少载荷</p>
+                                <el-button @click="handleReset" class="sci-fi-reset-btn">重置参数</el-button>
+                            </div>
+                        </template>
+
+                        <template v-else>
+                            <div class="result-header">
+                                <h3 class="result-title">✅ 最优解算结果</h3>
+                                <div class="result-status">
+                                    <span class="status-dot"></span>
+                                    <span>CONVERGED</span>
                                 </div>
-                            </el-form-item>
-                        </el-form>
-                    </div>
+                            </div>
 
-                    <div class="divider-line"></div>
-
-                    <!-- 可选模块 -->
-                    <div class="config-section">
-                        <h3 class="section-title">【载荷配置】</h3>
-
-                        <el-form :model="form" size="large" class="modules-form"
-                            :label-position="isMobile ? 'top' : 'right'">
-                            <div class="modules-grid">
-                                <div v-for="(label, key) in MODULE_LABELS" :key="key" class="module-item">
-                                    <div class="module-header">
-                                        <span class="module-name">{{ label }}</span>
-                                    </div>
-                                    <el-input-number v-model="form[key]" :min="0" :max="20" class="module-input" />
+                            <div class="key-stats">
+                                <div class="stat-item primary">
+                                    <div class="stat-label">总起飞重量</div>
+                                    <div class="stat-value">{{ result[0].weight.toLocaleString() }} <span
+                                            class="stat-unit">kg</span></div>
+                                </div>
+                                <div class="stat-item success">
+                                    <div class="stat-label">预计射程</div>
+                                    <div class="stat-value">{{ result[0].finalDistance.toLocaleString() }} <span
+                                            class="stat-unit">km</span></div>
+                                </div>
+                                <div class="stat-item warning">
+                                    <div class="stat-label">质量惩罚</div>
+                                    <div class="stat-value">{{ result[0].punish.toLocaleString() }} <span
+                                            class="stat-unit">km</span></div>
                                 </div>
                             </div>
 
-                            <el-form-item class="calculate-btn-wrapper">
-                                <el-button @click="handleCalculate" class="sci-fi-calculate-btn">
-                                    <span class="btn-text">▶ 执行解算</span>
-                                    <span class="btn-glow"></span>
-                                </el-button>
-                            </el-form-item>
-                        </el-form>
-                    </div>
-                </k-card>
+                            <el-divider class="sci-fi-divider" />
 
-                <!-- 右侧：结果显示面板 -->
-                <k-card class="result-card sci-fi-card">
-                    <div class="card-header-line"></div>
-
-                    <template v-if="!result">
-                        <div class="empty-state">
-                            <div class="scan-line"></div>
-                            <div class="empty-icon">📡</div>
-                            <p class="empty-text">等待输入参数...</p>
-                            <p class="empty-hint">请在左侧配置核心参数与载荷</p>
-                        </div>
-                    </template>
-
-                    <template v-else-if="result.length === 0">
-                        <div class="empty-state">
-                            <div class="empty-icon">⚠️</div>
-                            <p class="empty-text error">解算失败</p>
-                            <p class="empty-hint">无法找到满足条件的配置，请尝试减少载荷</p>
-                            <el-button @click="handleReset" class="sci-fi-reset-btn">重置参数</el-button>
-                        </div>
-                    </template>
-
-                    <template v-else>
-                        <div class="result-header">
-                            <h3 class="result-title">✅ 最优解算结果</h3>
-                            <div class="result-status">
-                                <span class="status-dot"></span>
-                                <span>CONVERGED</span>
-                            </div>
-                        </div>
-
-                        <div class="key-stats">
-                            <div class="stat-item primary">
-                                <div class="stat-label">总起飞重量</div>
-                                <div class="stat-value">{{ result[0].weight.toLocaleString() }} <span
-                                        class="stat-unit">kg</span></div>
-                            </div>
-                            <div class="stat-item success">
-                                <div class="stat-label">预计射程</div>
-                                <div class="stat-value">{{ result[0].finalDistance.toLocaleString() }} <span
-                                        class="stat-unit">km</span></div>
-                            </div>
-                            <div class="stat-item warning">
-                                <div class="stat-label">质量惩罚</div>
-                                <div class="stat-value">{{ result[0].punish.toLocaleString() }} <span
-                                        class="stat-unit">km</span></div>
-                            </div>
-                        </div>
-
-                        <el-divider class="sci-fi-divider" />
-
-                        <div class="detail-stats">
-                            <h4 class="detail-title">【配置详情】</h4>
-                            <div class="detail-grid">
-                                <!-- 燃料/蒸汽填充量：所有引擎都显示 -->
-                                <div class="detail-item">
-                                    <span class="detail-label">{{ form.type === 'steam' ? '蒸汽填充量' : '燃料填充量'
+                            <div class="detail-stats">
+                                <h4 class="detail-title">【配置详情】</h4>
+                                <div class="detail-grid">
+                                    <!-- 燃料/蒸汽填充量：所有引擎都显示 -->
+                                    <div class="detail-item">
+                                        <span class="detail-label">{{ form.type === 'steam' ? '蒸汽填充量' : '燃料填充量'
                                         }}</span>
-                                    <span class="detail-value">{{ result[0].capacity.toLocaleString() }}
-                                        kg</span>
-                                </div>
-                                <!-- 助推器数量 -->
-                                <div class="detail-item">
-                                    <span class="detail-label">助推器数量</span>
-                                    <span class="detail-value">{{ result[0].booster }} 个</span>
-                                </div>
-                                <!-- 燃料舱数量：非蒸汽引擎显示 -->
-                                <div class="detail-item" v-if="result[0].fuelCount !== undefined">
-                                    <span class="detail-label">燃料舱数量</span>
-                                    <span class="detail-value">{{ result[0].fuelCount }} 个</span>
-                                </div>
-                                <!-- 氧化剂舱数量：非蒸汽引擎显示 -->
-                                <div class="detail-item" v-if="result[0].oxygenCount !== undefined">
-                                    <span class="detail-label">氧化剂舱数量</span>
-                                    <span class="detail-value">{{ result[0].oxygenCount }} 个</span>
+                                        <span class="detail-value">{{ result[0].capacity.toLocaleString() }}
+                                            kg</span>
+                                    </div>
+                                    <!-- 助推器数量 -->
+                                    <div class="detail-item">
+                                        <span class="detail-label">助推器数量</span>
+                                        <span class="detail-value">{{ result[0].booster }} 个</span>
+                                    </div>
+                                    <!-- 燃料舱数量：非蒸汽引擎显示 -->
+                                    <div class="detail-item" v-if="result[0].fuelCount !== undefined">
+                                        <span class="detail-label">燃料舱数量</span>
+                                        <span class="detail-value">{{ result[0].fuelCount }} 个</span>
+                                    </div>
+                                    <!-- 氧化剂舱数量：非蒸汽引擎显示 -->
+                                    <div class="detail-item" v-if="result[0].oxygenCount !== undefined">
+                                        <span class="detail-label">氧化剂舱数量</span>
+                                        <span class="detail-value">{{ result[0].oxygenCount }} 个</span>
+                                    </div>
                                 </div>
                             </div>
-                        </div>
 
-                        <el-divider class="sci-fi-divider" />
+                            <el-divider class="sci-fi-divider" />
 
-                        <div class="data-table-section">
-                            <h4 class="detail-title">【原始数据】</h4>
-                            <div class="table-wrapper">
-                                <el-table :data="result" stripe class="sci-fi-table">
-                                    <el-table-column prop="weight" label="总重(kg)" sortable />
-                                    <el-table-column prop="finalDistance" label="射程(km)" sortable />
-                                    <el-table-column prop="booster" label="助推器" />
-                                    <el-table-column prop="fuelCount" label="燃料舱" />
-                                    <el-table-column prop="oxygenCount" label="氧化剂舱" />
-                                </el-table>
+                            <div class="data-table-section">
+                                <h4 class="detail-title">【原始数据】</h4>
+                                <div class="table-wrapper">
+                                    <el-table :data="result" stripe class="sci-fi-table">
+                                        <el-table-column prop="weight" label="总重(kg)" sortable />
+                                        <el-table-column prop="finalDistance" label="射程(km)" sortable />
+                                        <el-table-column prop="booster" label="助推器" />
+                                        <el-table-column prop="fuelCount" label="燃料舱" />
+                                        <el-table-column prop="oxygenCount" label="氧化剂舱" />
+                                    </el-table>
+                                </div>
                             </div>
-                        </div>
-                    </template>
-                </k-card>
-            </div>
-        </k-card>
-    </div>
+                        </template>
+                    </k-card>
+                </div>
+            </k-card>
+        </el-scrollbar>
+    </k-layout>
 </template>
 
 <script setup lang="ts">
@@ -266,8 +269,7 @@ const handleReset = () => {
     result.value = null;
 };
 </script>
-
-<style scoped>
+<style lang="css" scoped>
 * {
     box-sizing: border-box;
 }
@@ -284,7 +286,7 @@ const handleReset = () => {
 }
 
 /* 深空背景 */
-.sci-fi-bg {
+.sci-fi-bg .main-container {
     background: linear-gradient(135deg, #0a0e27 0%, #1a1f3a 50%, #0f172a 100%);
     color: #e0e7ff;
 }
@@ -411,7 +413,7 @@ const handleReset = () => {
 /* ===================== 布局 ===================== */
 .content-layout {
     display: grid;
-    grid-template-columns: 460px 1fr;
+    grid-template-areas: 460px 1fr;
     gap: 24px;
     position: relative;
     z-index: 1;
@@ -938,7 +940,7 @@ const handleReset = () => {
 
 /* ===================== Element Plus 组件深度样式覆盖 ===================== */
 .sci-fi-form :deep(.el-form-item__label) {
-    color: #94a3b8;
+    color: #7634b3;
     font-weight: 600;
     padding-bottom: 6px;
     line-height: 1.4;
@@ -1074,5 +1076,6 @@ const handleReset = () => {
     .module-item {
         padding: 10px;
     }
+
 }
 </style>
