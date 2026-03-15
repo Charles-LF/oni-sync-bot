@@ -138,7 +138,7 @@ async function syncSingleImage(
       data: form,
       headers: {
         ...form.getHeaders(),
-        "X-authkey": `${getSitesConfig(config).huiji.uakey}`,
+        // "X-authkey": `${getSitesConfig(config).huiji.uakey}`,
       },
     });
 
