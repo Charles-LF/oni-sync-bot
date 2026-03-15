@@ -1,6 +1,5 @@
 import { Mwn } from "mwn";
 import { ISiteConfig } from "../config";
-import { Cookie } from "tough-cookie";
 import { logger } from "./tools";
 
 /**
@@ -19,15 +18,9 @@ export async function login(siteConfig: ISiteConfig): Promise<Mwn> {
     },
   });
   if (siteConfig.name === "bwiki") {
-    const sessdataCookie = new Cookie({
-      key: "SESSDATA",
-      value: "666",
-      domain: "wiki.biligame.com",
-      path: "/oni",
-      httpOnly: true,
-      secure: true,
-    });
-    bot.cookieJar.setCookie(sessdataCookie, bot.options.apiUrl!, (err) => {
+    const cookieString =
+      "SESSDATA=666; Domain=wiki.biligame.com; Path=/oni; HttpOnly; Secure";
+    bot.cookieJar.setCookie(cookieString, bot.options.apiUrl!, (err) => {
       if (err) console.error("Cookie 注入失败：", err);
     });
   }
