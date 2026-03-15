@@ -7,13 +7,12 @@ export interface ISiteConfig {
   api: string; // 站点 API 地址
   username: string; // 站点用户名
   password: string; // 站点密码
-  uakey?: string; // 站点 UAKey（仅灰机wiki需要）
   userAgent: string; // 站点 User-Agent
 }
 
 interface ISitesConfig {
   gg: ISiteConfig;
-  huiji: ISiteConfig;
+  bwiki: ISiteConfig;
 }
 
 export function getSitesConfig(config: Config): ISitesConfig {
@@ -25,13 +24,12 @@ export function getSitesConfig(config: Config): ISitesConfig {
       password: config.ggPassword,
       userAgent: userAgent,
     },
-    huiji: {
-      name: "灰机wiki",
-      api: "https://oni.huijiwiki.com/api.php",
-      username: config.huijiUsername,
-      password: config.huijiPassword,
+    bwiki: {
+      name: "bwiki",
+      api: "https://wiki.biligame.com/oni/api.php",
+      username: config.bwikiusername,
+      password: config.bwikipassword,
       userAgent: userAgent,
-      uakey: config.huijiUAKey,
     },
   };
 }

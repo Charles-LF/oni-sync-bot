@@ -1,6 +1,6 @@
 import { Mwn } from "mwn";
 import { ISiteConfig } from "../config";
-import type { RawRequestParams } from "mwn/build/core";
+import { Cookie } from "tough-cookie";
 import { logger } from "./tools";
 
 /**
@@ -18,17 +18,19 @@ export async function login(siteConfig: ISiteConfig): Promise<Mwn> {
       assert: "user",
     },
   });
-
-  const customRequestOptions: RawRequestParams = {
-    headers: {
-      "User-Agent": siteConfig.userAgent,
-    },
-  };
-
-  if (siteConfig.uakey) {
-    customRequestOptions.headers!["X-authkey"] = siteConfig.uakey;
+  if (siteConfig.name === "bwiki") {
+    const sessdataCookie = new Cookie({
+      key: "SESSDATA",
+      value: "666",
+      domain: "wiki.biligame.com",
+      path: "/oni",
+      httpOnly: true,
+      secure: true,
+    });
+    bot.cookieJar.setCookie(sessdataCookie, bot.options.apiUrl!, (err) => {
+      if (err) console.error("Cookie 注入失败：", err);
+    });
   }
-  bot.setRequestOptions(customRequestOptions);
   await bot.login();
 
   logger.info(`✅ 成功登录 ${siteConfig.name}`);

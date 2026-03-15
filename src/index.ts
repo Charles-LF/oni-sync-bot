@@ -63,32 +63,19 @@ export interface WikiPages {
 export interface Config {
   ggUsername: string;
   ggPassword: string;
-  huijiUsername: string;
-  huijiPassword: string;
-  huijiUAKey: string;
+  bwikiusername: string;
+  bwikipassword: string;
   domain: string;
   main_site: string;
   bwiki_site: string;
-  huiji_site: string;
   logsUrl: string;
 }
 
 export const Config: Schema<Config> = Schema.object({
-  ggUsername: Schema.string()
-    .description("WIKIGG 用户名")
-    .default("${{ env.ggUsername }}"),
-  ggPassword: Schema.string()
-    .description("WIKIGG 密码")
-    .default("${{ env.ggPassword }}"),
-  huijiUsername: Schema.string()
-    .description("灰机wiki 用户名")
-    .default("${{ env.huijiUsername }}"),
-  huijiPassword: Schema.string()
-    .description("灰机wiki 密码")
-    .default("${{ env.huijiPassword }}"),
-  huijiUAKey: Schema.string()
-    .description("灰机wiki UAKey")
-    .default("${{ env.huijiUAKey }}"),
+  ggUsername: Schema.string().description("WIKIGG 用户名").default("1"),
+  ggPassword: Schema.string().description("WIKIGG 密码").default("1"),
+  bwikiusername: Schema.string().description("bwiki用户名").default("1"),
+  bwikipassword: Schema.string().description("bwiki密码").default("1"),
   domain: Schema.string()
     .description("你的短链域名（必填，如：klei.vip）")
     .default("klei.vip"),
@@ -98,9 +85,6 @@ export const Config: Schema<Config> = Schema.object({
   bwiki_site: Schema.string()
     .description("镜像站域名（必填，如：wiki.biligame.com）")
     .default("wiki.biligame.com/oni"),
-  huiji_site: Schema.string()
-    .description("灰机wiki域名（必填，如：oni.huijiwiki.com）")
-    .default("oni.huijiwiki.com/wiki/"),
   logsUrl: Schema.string()
     .description("日志查看地址")
     .default("https://klei.vip/onilogs"),
@@ -120,7 +104,7 @@ class PublicLogProvider extends DataService<Logger.Record[]> {
 export function apply(ctx: Context, config: Config) {
   const log = ctx.logger("oni-sync");
   let ggbot: Mwn;
-  let huijibot: Mwn;
+  let bwikibot: Mwn;
   // 注入控制台
   ctx.inject(["console"], (ctx) => {
     ctx.console.addEntry({
@@ -192,20 +176,6 @@ export function apply(ctx: Context, config: Config) {
     )}`;
     router.redirect(targetUrl); //重定向至wiki.biligame.com
   });
-  // 镜像站路由：klei.vip/hj/[id] → 跳转至 oni.huijiwiki.com/wiki/[title]
-  ctx.server.get("/hj/:id", async (router) => {
-    const pageId = Number(router.params.id);
-    if (isNaN(pageId)) return (router.body = "❌ 无效的页面ID，必须为数字！");
-
-    const [page] = await ctx.database.get("wikipages", { id: pageId });
-    if (!page)
-      return (router.body = `❌ 未找到ID为【${pageId}】的页面，请联系管理员更新缓存！`);
-
-    const targetUrl = `https://${config.huiji_site}/${encodeURIComponent(
-      page.title,
-    )}`;
-    router.redirect(targetUrl); //重定向至oni.huijiwiki.com
-  });
   //#endregion
 
   // 插件准备就绪后登录两个账号并且初始化定时任务
@@ -213,23 +183,23 @@ export function apply(ctx: Context, config: Config) {
     logger.info("初始化中...");
     const sitesConfig = getSitesConfig(config);
     ggbot = await login(sitesConfig.gg);
-    huijibot = await login(sitesConfig.huiji);
-    if (ggbot.login && huijibot.login) {
+    bwikibot = await login(sitesConfig.bwiki);
+    if (ggbot.login && bwikibot.login) {
       logger.info("登录成功，插件已准备就绪");
     } else {
       logger.error("登录失败，请检查配置");
     }
     //#region 自动任务：每小时获取原站三小时的最近编辑并尝试同步
     ctx.cron("15 * * * *", async () => {
-      await incrementalUpdate(ggbot, huijibot, config);
+      await incrementalUpdate(ggbot, bwikibot, config);
     });
     //#endregion
 
     //#region 自动任务：每周四8:30同步所有页面
     ctx.cron("30 8 * * 4", async () => {
-      await syncPages(ggbot, huijibot)
+      await syncPages(ggbot, bwikibot)
         .then(() => {
-          logger.info("自动任务：尝试同步所有页面，从 WIKIGG 到 灰机wiki");
+          logger.info("自动任务：尝试同步所有页面，从 WIKIGG 到 bwiki");
         })
         .catch((err) => {
           logger.error(`同步所有页面失败`);
@@ -239,9 +209,9 @@ export function apply(ctx: Context, config: Config) {
     //#endregion
     //#region 自动任务：每周三8:30同步所有图片
     ctx.cron("30 8 * * 3", async () => {
-      await syncAllImages(ggbot, huijibot, config)
+      await syncAllImages(ggbot, bwikibot, config)
         .then(() => {
-          logger.info("自动任务：尝试同步所有图片，从 WIKIGG 到 灰机wiki");
+          logger.info("自动任务：尝试同步所有图片，从 WIKIGG 到 bwiki");
         })
         .catch((err) => {
           logger.error(`同步所有图片失败`);
@@ -256,7 +226,7 @@ export function apply(ctx: Context, config: Config) {
   ctx
     .command("sync <pageTitle:string>", "同步指定页面", { authority: 2 })
     .action(async ({ session }, pageTitle) => {
-      await syncSinglePage(ggbot, huijibot, pageTitle, "sync-bot")
+      await syncSinglePage(ggbot, bwikibot, pageTitle, "sync-bot")
         .then(() => {
           session.send(
             `✅ 已尝试同步页面：${pageTitle}，请前往控制台查看：${config.logsUrl}`,
@@ -279,7 +249,7 @@ export function apply(ctx: Context, config: Config) {
       session.send(
         `🚀 获取3h内的编辑并尝试更新，任务耗时可能较长，请前往控制台查看日志:${config.logsUrl}`,
       );
-      await incrementalUpdate(ggbot, huijibot, config)
+      await incrementalUpdate(ggbot, bwikibot, config)
         .then(() => {
           session.send(
             `✅ 已尝试获取三小时前的编辑并同步，请前往控制台查看：${config.logsUrl}`,
@@ -301,7 +271,7 @@ export function apply(ctx: Context, config: Config) {
       session.send(
         `🚀 开始同步所有页面，任务耗时较长，请前往控制台查看日志:${config.logsUrl}`,
       );
-      await syncPages(ggbot, huijibot)
+      await syncPages(ggbot, bwikibot)
         .then(() => {
           session.send(
             `✅ 已尝试同步所有页面，请前往控制台查看：${config.logsUrl}`,
@@ -323,7 +293,7 @@ export function apply(ctx: Context, config: Config) {
     })
     .action(async ({ session }, moduleTitle) => {
       await session.send(`✅ 同步中，请前往控制台查看：${config.logsUrl}`);
-      await syncSingleModule(ggbot, huijibot, moduleTitle, "sync-bot")
+      await syncSingleModule(ggbot, bwikibot, moduleTitle, "sync-bot")
         .then(() => {
           session.send(
             `✅ 已尝试同步模块：${moduleTitle}，请前往控制台查看：${config.logsUrl}`,
@@ -343,7 +313,7 @@ export function apply(ctx: Context, config: Config) {
       await session.send(
         `🚀 开始同步所有模块，任务耗时较长，请前往控制台查看：${config.logsUrl}`,
       );
-      await syncModules(ggbot, huijibot)
+      await syncModules(ggbot, bwikibot)
         .then(() => {
           session.send(
             `✅ 已尝试同步所有模块，请前往控制台查看：${config.logsUrl}`,
@@ -367,7 +337,7 @@ export function apply(ctx: Context, config: Config) {
       );
       await syncSingleImage(
         ggbot,
-        huijibot,
+        bwikibot,
         `${imgTitle.startsWith("File:") ? "" : "File:"}${imgTitle}`,
         config,
       )
@@ -388,7 +358,7 @@ export function apply(ctx: Context, config: Config) {
       session.send(
         `🚀 开始同步所有图片，任务耗时较长，请前往控制台查看：${config.logsUrl}`,
       );
-      await syncAllImages(ggbot, huijibot, config)
+      await syncAllImages(ggbot, bwikibot, config)
         .then(() => {
           session.send(
             `✅ 已尝试同步所有图片，请前往控制台查看：${config.logsUrl}`,
@@ -425,7 +395,7 @@ export function apply(ctx: Context, config: Config) {
       });
       if (preciseTitleRes.length > 0) {
         const { id } = preciseTitleRes[0];
-        return `✅ 精准匹配成功\n原站点: https://${config.domain}/gg/${id}\n\nbwiki: https://${config.domain}/bw/${id}\n\n灰机：https://${config.domain}/hj/${id}\n\n注：bwiki将在不久后停止技术支持，镜像站点将迁移至灰机！并继续维护`;
+        return `✅ 精准匹配成功\n原站点: https://${config.domain}/gg/${id}\n\nbwiki: https://${config.domain}/bw/${id}`;
       }
 
       // 匹配全拼
@@ -434,7 +404,7 @@ export function apply(ctx: Context, config: Config) {
       });
       if (preciseFullPinyinRes.length > 0) {
         const { id, title } = preciseFullPinyinRes[0];
-        return `✅ 拼音精准匹配成功（${queryKey} → ${title}）\n原站点: https://${config.domain}/gg/${id}\n\nbwiki: https://${config.domain}/bw/${id}\n\n灰机：https://${config.domain}/hj/${id}\n\n注：bwiki将在不久后停止技术支持，镜像站点将迁移至灰机！并继续维护`;
+        return `✅ 拼音精准匹配成功（${queryKey} → ${title}）\n原站点: https://${config.domain}/gg/${id}\n\nbwiki: https://${config.domain}/bw/${id}`;
       }
 
       // 匹配首字母
@@ -443,7 +413,7 @@ export function apply(ctx: Context, config: Config) {
       });
       if (preciseFirstPinyinRes.length > 0) {
         const { id, title } = preciseFirstPinyinRes[0];
-        return `✅ 首字母精准匹配成功（${queryKey} → ${title}）\n原站点: https://${config.domain}/gg/${id}\n\nbwiki: https://${config.domain}/bw/${id}\n\n灰机：https://${config.domain}/hj/${id}\n\n注：bwiki将在不久后停止技术支持，镜像站点将迁移至灰机！并继续维护 `;
+        return `✅ 首字母精准匹配成功（${queryKey} → ${title}）\n原站点: https://${config.domain}/gg/${id}\n\nbwiki: https://${config.domain}/bw/${id} `;
       }
 
       // 模糊匹配（标题/全拼/首字母包含关键词）
@@ -516,7 +486,7 @@ export function apply(ctx: Context, config: Config) {
       }
 
       const { id } = uniqueResult[selectNum - 1];
-      return `✅ 选择成功\n原站点: https://${config.domain}/gg/${id}\n\nbwiki: https://${config.domain}/bw/${id}\n\n灰机：https://${config.domain}/hj/${id}\n\n注：bwiki将在不久后停止技术支持，镜像站点将迁移至灰机！并继续维护`;
+      return `✅ 选择成功\n原站点: https://${config.domain}/gg/${id}\n\nbwiki: https://${config.domain}/bw/${id}`;
     });
   // #endregion
 
