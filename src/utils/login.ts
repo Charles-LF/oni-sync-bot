@@ -19,9 +19,14 @@ export async function login(siteConfig: ISiteConfig): Promise<Mwn> {
   });
   if (siteConfig.name === "bwiki") {
     const cookieString =
-      "SESSDATA=666; Domain=wiki.biligame.com; Path=/oni; HttpOnly; Secure";
+      "SESSDATA=666; Domain=wiki.biligame.com; Path=/oni; HttpOnly; Secure;";
     bot.cookieJar.setCookie(cookieString, bot.options.apiUrl!, (err) => {
       if (err) console.error("Cookie 注入失败：", err);
+    });
+    bot.setRequestOptions({
+      headers: {
+        referer: "https://wiki.biligame.com/oni/",
+      },
     });
   }
   await bot.login();
