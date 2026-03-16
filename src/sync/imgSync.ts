@@ -3,7 +3,6 @@ import { sleep } from "koishi";
 import fetch from "node-fetch";
 import FormData from "form-data";
 import { Config } from "../index";
-import { getSitesConfig } from "../config";
 import { logger } from "../utils/tools";
 
 // 配置项
@@ -93,6 +92,8 @@ async function syncSingleImage(
 
     // 哈希校验
     const targetImageInfo = await getImageInfo(targetBot, fileName);
+    logger.info(`原图片sha1: ${sourceImageInfo.sha1}`);
+    logger.info(`目标图片sha1: ${targetImageInfo.sha1}`);
     if (targetImageInfo && targetImageInfo.sha1 === sourceImageInfo.sha1) {
       logger.info(`[SyncImg] 🟡 图片 ${fileName} 已存在且内容一致，跳过`);
       return { success: true, reason: "no_change" };
@@ -152,6 +153,13 @@ async function syncSingleImage(
       throw new Error(`未知响应: ${JSON.stringify(responseData)}`);
     }
   } catch (error) {
+    if (
+      error instanceof Error &&
+      error.message.includes("fileexists-no-change")
+    ) {
+      logger.info(`[SyncImg] 🟡 图片 ${fileName} 已存在且内容相同，跳过`);
+      return { success: true, reason: "no_change" };
+    }
     const errMsg = (error as Error).message || String(error);
     logger.error(`[SyncImg] ❌ 图片 ${fileName} 同步失败:`, errMsg);
     return { success: false, reason: errMsg };
