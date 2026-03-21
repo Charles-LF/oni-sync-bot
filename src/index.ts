@@ -381,7 +381,7 @@ export function apply(ctx: Context, config: Config) {
       const queryKey = itemName.trim().toLowerCase();
       // 空关键词返回使用说明，不进行查询，需要手动输入数据库ID 8个8
       if (queryKey === "")
-        return `以下是使用说明：\n原站点: https://${config.domain}/gg/88888888\n\nbwiki: https://${config.domain}/hj/88888888`;
+        return `以下是使用说明：\n原站点: https://${config.domain}/gg/88888888\n\nbwiki: https://${config.domain}/bw/88888888`;
       if (queryKey === "火箭计算器") {
         return "请前往以下站点使用火箭计算器工具：\n\nhttps://klei.vip/calculator\n\n（注：该工具正在测试阶段，数据可能不够准确，仅供参考）";
       }
