@@ -67,6 +67,63 @@ async function getImageInfo(
 }
 
 /**
+ * 删除文件的旧版本，只保留最新版本
+ */
+async function deleteOldVersions(bot: Mwn, fileName: string): Promise<void> {
+  try {
+    // 获取文件的所有修订版本
+    const response = await bot.query({
+      action: "query",
+      titles: fileName,
+      prop: "revisions",
+      rvprop: "ids|timestamp",
+      rvlimit: "max",
+      rvdir: "newer", // 按时间正序排列，最新的在最后
+    });
+
+    const pages = (response.query?.pages || {}) as Record<string, any>;
+    const page = Object.values(pages)[0];
+
+    if (!page || !page.revisions || page.revisions.length <= 1) {
+      // 没有旧版本或只有一个版本，无需删除
+      return;
+    }
+
+    // 获取所有修订ID，除了最后一个（最新版本）
+    const revisionIds = page.revisions
+      .slice(0, -1)
+      .map((rev: any) => rev.revid);
+
+    // 获取删除操作的token
+    const token = await bot.getCsrfToken();
+
+    // 逐个删除旧版本
+    for (const revid of revisionIds) {
+      try {
+        await bot.rawRequest({
+          method: "POST",
+          url: bot.options.apiUrl as string,
+          data: {
+            action: "delete",
+            title: fileName,
+            revid: revid,
+            token: token,
+            reason: "自动清理旧版本，只保留最新同步版本",
+            format: "json",
+          },
+        });
+        logger.info(`[SyncImg] 🗑️ 删除旧版本 ${revid} 成功`);
+      } catch (error) {
+        logger.error(`[SyncImg] ❌ 删除旧版本 ${revid} 失败:`, error);
+        // 继续处理其他版本，不中断流程
+      }
+    }
+  } catch (error) {
+    logger.error(`[SyncImg] ❌ 获取版本信息失败:`, error);
+  }
+}
+
+/**
  * 同步单个图片
  */
 async function syncSingleImage(
@@ -93,7 +150,7 @@ async function syncSingleImage(
     // 哈希校验
     const targetImageInfo = await getImageInfo(targetBot, fileName);
     logger.info(`原图片sha1: ${sourceImageInfo.sha1}`);
-    logger.info(`目标图片sha1: ${targetImageInfo.sha1}`);
+    logger.info(`目标图片sha1: ${targetImageInfo?.sha1}`);
     if (targetImageInfo && targetImageInfo.sha1 === sourceImageInfo.sha1) {
       logger.info(`[SyncImg] 🟡 图片 ${fileName} 已存在且内容一致，跳过`);
       return { success: true, reason: "no_change" };
@@ -146,6 +203,10 @@ async function syncSingleImage(
     const responseData = rawResponse.data;
     if (responseData.upload && responseData.upload.result === "Success") {
       logger.info(`[SyncImg] ✅ 图片 ${fileName} 同步成功`);
+
+      // 删除旧版本
+      await deleteOldVersions(targetBot, fileName);
+
       return { success: true, reason: "synced" };
     } else if (responseData.error) {
       throw new Error(`${responseData.error.code}: ${responseData.error.info}`);
