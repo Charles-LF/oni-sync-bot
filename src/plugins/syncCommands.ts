@@ -27,6 +27,10 @@ export class SyncCommands {
     logger.info("WikiBot 服务已就绪，初始化定时任务和指令");
 
     ctx.cron("15 * * * *", async () => {
+      if (!ctx.wikiBot.isGGBotReady() || !ctx.wikiBot.isBWikiBotReady()) {
+        logger.warn("增量更新跳过：Wiki 机器人未就绪");
+        return;
+      }
       await incrementalUpdate(
         ctx.wikiBot.getGGBot(),
         ctx.wikiBot.getBWikiBot(),
@@ -35,6 +39,10 @@ export class SyncCommands {
     });
 
     ctx.cron("30 8 * * 4", async () => {
+      if (!ctx.wikiBot.isGGBotReady() || !ctx.wikiBot.isBWikiBotReady()) {
+        logger.warn("同步所有页面跳过：Wiki 机器人未就绪");
+        return;
+      }
       await syncPages(ctx.wikiBot.getGGBot(), ctx.wikiBot.getBWikiBot())
         .then(() => {
           logger.info("自动任务：尝试同步所有页面，从 WIKIGG 到 bwiki");
@@ -46,6 +54,10 @@ export class SyncCommands {
     });
 
     ctx.cron("30 8 * * 3", async () => {
+      if (!ctx.wikiBot.isGGBotReady() || !ctx.wikiBot.isBWikiBotReady()) {
+        logger.warn("同步所有图片跳过：Wiki 机器人未就绪");
+        return;
+      }
       await syncAllImages(
         ctx.wikiBot.getGGBot(),
         ctx.wikiBot.getBWikiBot(),
@@ -63,10 +75,20 @@ export class SyncCommands {
     this.registerCommands(ctx);
   }
 
+  private checkBotsReady(ctx: Context): boolean {
+    const ggReady = ctx.wikiBot.isGGBotReady();
+    const bwReady = ctx.wikiBot.isBWikiBotReady();
+
+    return ggReady && bwReady;
+  }
+
   private registerCommands(ctx: Context) {
     ctx
       .command("sync <pageTitle:string>", "同步指定页面", { authority: 2 })
       .action(async ({ session }, pageTitle) => {
+        if (!this.checkBotsReady(ctx)) {
+          return session.send("❌ Wiki 机器人未就绪，请检查登录配置或查看日志");
+        }
         await syncSinglePage(
           ctx.wikiBot.getGGBot(),
           ctx.wikiBot.getBWikiBot(),
@@ -90,6 +112,9 @@ export class SyncCommands {
       })
       .alias("增量更新")
       .action(async ({ session }) => {
+        if (!this.checkBotsReady(ctx)) {
+          return session.send("❌ Wiki 机器人未就绪，请检查登录配置或查看日志");
+        }
         session.send(
           `🚀 获取3h内的编辑并尝试更新，任务耗时可能较长，请前往控制台查看日志:${this.config.logsUrl}`,
         );
@@ -114,6 +139,9 @@ export class SyncCommands {
     ctx
       .command("sync.allpages", "同步所有页面", { authority: 2 })
       .action(async ({ session }) => {
+        if (!this.checkBotsReady(ctx)) {
+          return session.send("❌ Wiki 机器人未就绪，请检查登录配置或查看日志");
+        }
         session.send(
           `🚀 开始同步所有页面，任务耗时较长，请前往控制台查看日志:${this.config.logsUrl}`,
         );
@@ -136,6 +164,9 @@ export class SyncCommands {
         authority: 2,
       })
       .action(async ({ session }, moduleTitle) => {
+        if (!this.checkBotsReady(ctx)) {
+          return session.send("❌ Wiki 机器人未就绪，请检查登录配置或查看日志");
+        }
         await session.send(
           `✅ 同步中，请前往控制台查看：${this.config.logsUrl}`,
         );
@@ -159,6 +190,9 @@ export class SyncCommands {
     ctx
       .command("sync.allmodules", "同步所有模块", { authority: 2 })
       .action(async ({ session }) => {
+        if (!this.checkBotsReady(ctx)) {
+          return session.send("❌ Wiki 机器人未就绪，请检查登录配置或查看日志");
+        }
         await session.send(
           `🚀 开始同步所有模块，任务耗时较长，请前往控制台查看：${this.config.logsUrl}`,
         );
@@ -179,6 +213,9 @@ export class SyncCommands {
     ctx
       .command("sync.img <imgTitle:string>", "同步指定图片", { authority: 2 })
       .action(async ({ session }, imgTitle) => {
+        if (!this.checkBotsReady(ctx)) {
+          return session.send("❌ Wiki 机器人未就绪，请检查登录配置或查看日志");
+        }
         await session.send(
           `🚀 开始同步，任务可能耗时较长，请前往控制台查看：${this.config.logsUrl}`,
         );
@@ -200,6 +237,9 @@ export class SyncCommands {
     ctx
       .command("sync.allimgs", "同步所有图片", { authority: 2 })
       .action(async ({ session }) => {
+        if (!this.checkBotsReady(ctx)) {
+          return session.send("❌ Wiki 机器人未就绪，请检查登录配置或查看日志");
+        }
         session.send(
           `🚀 开始同步所有图片，任务耗时较长，请前往控制台查看：${this.config.logsUrl}`,
         );

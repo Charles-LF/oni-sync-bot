@@ -130,20 +130,38 @@ export class WikiBotService extends Service {
       const sitesConfig = this.getSitesConfig();
 
       logger.info("开始登录 WIKIGG...");
-      this.ggbot = await this.loginWithRetry(sitesConfig.gg);
+      try {
+        this.ggbot = await this.loginWithRetry(sitesConfig.gg);
+      } catch (error) {
+        logger.error(
+          "WIKIGG 登录失败，服务将继续运行，但 WIKIGG 相关功能不可用",
+          error,
+        );
+      }
 
       logger.info("开始登录 bwiki...");
-      this.bwikibot = await this.loginWithRetry(sitesConfig.bwiki);
+      try {
+        this.bwikibot = await this.loginWithRetry(sitesConfig.bwiki);
+      } catch (error) {
+        logger.error(
+          "bwiki 登录失败，服务将继续运行，但 bwiki 相关功能不可用",
+          error,
+        );
+      }
 
       if (this.ggbot && this.bwikibot) {
         this.isReady = true;
         logger.info("WikiBotService 初始化成功，两个 Wiki 已登录");
+      } else if (this.ggbot || this.bwikibot) {
+        this.isReady = true;
+        logger.warn(
+          `WikiBotService 部分初始化成功，已登录: ${this.ggbot ? "WIKIGG" : ""} ${this.bwikibot ? "bwiki" : ""}`,
+        );
       } else {
-        logger.error("WikiBotService 初始化失败，部分登录失败");
+        logger.error("WikiBotService 初始化失败，所有登录都失败");
       }
     } catch (error) {
       logger.error("WikiBotService 初始化出错:", error);
-      throw error;
     }
   }
 
@@ -154,16 +172,65 @@ export class WikiBotService extends Service {
     logger.info("WikiBotService 已停止");
   }
 
+  async relogin(): Promise<{ gg: boolean; bwiki: boolean }> {
+    const sitesConfig = this.getSitesConfig();
+    let ggSuccess = false;
+    let bwikiSuccess = false;
+
+    logger.info("开始重新登录 WIKIGG...");
+    try {
+      this.ggbot = await this.loginWithRetry(sitesConfig.gg);
+      ggSuccess = true;
+      logger.info("✅ 成功重新登录 WIKIGG");
+    } catch (error) {
+      this.ggbot = null;
+      logger.error("❌ 重新登录 WIKIGG 失败", error);
+    }
+
+    logger.info("开始重新登录 bwiki...");
+    try {
+      this.bwikibot = await this.loginWithRetry(sitesConfig.bwiki);
+      bwikiSuccess = true;
+      logger.info("✅ 成功重新登录 bwiki");
+    } catch (error) {
+      this.bwikibot = null;
+      logger.error("❌ 重新登录 bwiki 失败", error);
+    }
+
+    if (this.ggbot && this.bwikibot) {
+      this.isReady = true;
+      logger.info("WikiBotService 重新登录成功，两个 Wiki 已登录");
+    } else if (this.ggbot || this.bwikibot) {
+      this.isReady = true;
+      logger.warn(
+        `WikiBotService 部分重新登录成功，已登录: ${this.ggbot ? "WIKIGG" : ""} ${this.bwikibot ? "bwiki" : ""}`,
+      );
+    } else {
+      this.isReady = false;
+      logger.error("WikiBotService 重新登录失败，所有登录都失败");
+    }
+
+    return { gg: ggSuccess, bwiki: bwikiSuccess };
+  }
+
+  isGGBotReady(): boolean {
+    return this.ggbot !== null;
+  }
+
+  isBWikiBotReady(): boolean {
+    return this.bwikibot !== null;
+  }
+
   getGGBot(): Mwn {
-    if (!this.ggbot || !this.isReady) {
-      throw new Error("WikiGG bot 尚未就绪");
+    if (!this.ggbot) {
+      throw new Error("WIKIGG bot 尚未就绪，请检查登录配置或查看日志");
     }
     return this.ggbot;
   }
 
   getBWikiBot(): Mwn {
-    if (!this.bwikibot || !this.isReady) {
-      throw new Error("bwiki bot 尚未就绪");
+    if (!this.bwikibot) {
+      throw new Error("bwiki bot 尚未就绪，请检查登录配置或查看日志");
     }
     return this.bwikibot;
   }
@@ -178,10 +245,10 @@ export interface WikiBotServiceConfig {
 
 export namespace WikiBotService {
   export const Config: Schema<WikiBotServiceConfig> = Schema.object({
-    ggUsername: Schema.string().default("1"),
-    ggPassword: Schema.string().default("1"),
-    bwikiusername: Schema.string().default("1"),
-    bwikipassword: Schema.string().default("1"),
+    ggUsername: Schema.string().description("WIKIGG 用户名").default("1"),
+    ggPassword: Schema.string().description("WIKIGG 密码").default("1"),
+    bwikiusername: Schema.string().description("bwiki用户名").default("1"),
+    bwikipassword: Schema.string().description("bwiki密码").default("1"),
   });
 }
 

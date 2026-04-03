@@ -1,25 +1,32 @@
 import { Context, Schema } from "koishi";
-import { WikiBotService } from "./services/wikiBotService";
+import {
+  WikiBotService,
+  WikiBotServiceConfig,
+} from "./services/wikiBotService";
 import { ConsoleLogProvider } from "./plugins/consoleLogProvider";
 import { DatabaseExtension } from "./plugins/databaseExtension";
-import { RouteRedirect } from "./plugins/routeRedirect";
-import { SyncCommands } from "./plugins/syncCommands";
-import { QueryCommands } from "./plugins/queryCommands";
-import { UpdateCommands } from "./plugins/updateCommands";
+import { RouteRedirect, RouteRedirectConfig } from "./plugins/routeRedirect";
+import { SyncCommands, SyncCommandsConfig } from "./plugins/syncCommands";
+import { QueryCommands, QueryCommandsConfig } from "./plugins/queryCommands";
+import { UpdateCommands, UpdateCommandsConfig } from "./plugins/updateCommands";
 
 export const name = "oni-sync-bot";
 
-export interface Config {}
+export interface Config
+  extends
+    WikiBotServiceConfig,
+    RouteRedirectConfig,
+    SyncCommandsConfig,
+    QueryCommandsConfig,
+    UpdateCommandsConfig {}
 
-const configSchemas = [
+export const Config: Schema<Config> = Schema.intersect([
   WikiBotService.Config,
   RouteRedirect.Config,
   SyncCommands.Config,
   QueryCommands.Config,
   UpdateCommands.Config,
-];
-
-export const Config: Schema<Config> = Schema.intersect(configSchemas);
+] as const);
 
 export function apply(ctx: Context, config: Config) {
   ctx.plugin(WikiBotService, config);

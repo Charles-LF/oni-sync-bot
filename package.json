@@ -1,7 +1,7 @@
 {
   "name": "koishi-plugin-oni-sync-bot",
   "description": "缺氧Wiki站镜像点同步-测试",
-  "version": "0.6.2",
+  "version": "0.7.0",
   "main": "lib/index.js",
   "typings": "lib/index.d.ts",
   "files": [
@@ -14,6 +14,13 @@
     "koishi",
     "plugin"
   ],
+  "koishi": {
+    "description": "缺氧Wiki站镜像点同步-测试",
+    "service": {
+      "required": [],
+      "optional": []
+    }
+  },
   "devDependencies": {
     "@koishijs/client": "^5.30.11"
   },

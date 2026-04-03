@@ -109,6 +109,33 @@ export class UpdateCommands {
           session.send(`❌ 添加重定向失败，请联系管理员查看日志`);
         }
       });
+
+    ctx
+      .command("relogin", "手动重新登录 Wiki 机器人", { authority: 2 })
+      .alias("重新登录")
+      .action(async ({ session }) => {
+        session.send("🚀 开始重新登录 Wiki 机器人...");
+        try {
+          const result = await ctx.wikiBot.relogin();
+          
+          let message = "📋 重新登录结果：\n";
+          message += result.gg ? "✅ WIKIGG 登录成功\n" : "❌ WIKIGG 登录失败\n";
+          message += result.bwiki ? "✅ bwiki 登录成功\n" : "❌ bwiki 登录失败\n";
+          
+          if (result.gg && result.bwiki) {
+            message += "\n🎉 两个 Wiki 机器人都已成功登录！";
+          } else if (result.gg || result.bwiki) {
+            message += "\n⚠️  部分 Wiki 机器人已登录";
+          } else {
+            message += "\n💥 所有 Wiki 机器人登录都失败了，请检查配置";
+          }
+          
+          session.send(message);
+        } catch (err) {
+          this.log.error("重新登录失败", err);
+          session.send("❌ 重新登录过程中发生错误，请查看日志");
+        }
+      });
   }
 }
 
