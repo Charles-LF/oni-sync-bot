@@ -1,5 +1,9 @@
 import { Mwn } from "mwn";
-import { getAndProcessPageContent, logger } from "../utils/tools";
+import {
+  getAndProcessPageContent,
+  logger,
+  getErrorMessage,
+} from "../utils/tools";
 import { sleep } from "koishi";
 
 const CONFIG = {
@@ -208,7 +212,8 @@ async function syncModules(oldSite: Mwn, newSite: Mwn): Promise<void> {
     logger.info(`├─ 成功：${successCount} 个（含跳过 ${skipCount} 个）`);
     logger.info(`└─ 失败：${failCount} 个`);
   } catch (error) {
-    logger.error(`[SyncAllModules] 💥 批量同步流程异常终止:`, error);
+    const errorMsg = getErrorMessage(error);
+    logger.error(`[SyncAllModules] 💥 批量同步流程异常终止:`, errorMsg);
     throw error; // 抛出错误让上层处理
   }
 }

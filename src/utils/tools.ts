@@ -77,6 +77,13 @@ function generatePinyinInfo(text: string): {
   };
 }
 
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return String(error);
+}
+
 const logger = new Logger("oni-sync");
 
-export { getAndProcessPageContent, generatePinyinInfo, logger };
+export { getAndProcessPageContent, generatePinyinInfo, logger, getErrorMessage };

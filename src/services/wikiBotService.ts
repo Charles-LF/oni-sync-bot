@@ -1,6 +1,6 @@
 import { Context, Service, Schema } from "koishi";
 import { Mwn } from "mwn";
-import { logger } from "../utils/tools";
+import { logger, getErrorMessage } from "../utils/tools";
 
 declare module "koishi" {
   interface Context {
@@ -71,15 +71,19 @@ export class WikiBotService extends Service {
       const bot = await this.login(siteConfig);
       return bot;
     } catch (error) {
+      const errorMsg = getErrorMessage(error);
       if (attempt < WikiBotService.MAX_RETRIES) {
         logger.warn(
           `登录 ${siteConfig.name} 失败，${WikiBotService.RETRY_DELAY / 1000}秒后重试...`,
-          error,
+          errorMsg,
         );
         await this.delay(WikiBotService.RETRY_DELAY);
         return this.loginWithRetry(siteConfig, attempt + 1);
       }
-      logger.error(`登录 ${siteConfig.name} 失败，已达到最大重试次数`, error);
+      logger.error(
+        `登录 ${siteConfig.name} 失败，已达到最大重试次数`,
+        errorMsg,
+      );
       throw error;
     }
   }
@@ -133,9 +137,10 @@ export class WikiBotService extends Service {
       try {
         this.ggbot = await this.loginWithRetry(sitesConfig.gg);
       } catch (error) {
+        const errorMsg = getErrorMessage(error);
         logger.error(
           "WIKIGG 登录失败，服务将继续运行，但 WIKIGG 相关功能不可用",
-          error,
+          errorMsg,
         );
       }
 
@@ -143,9 +148,10 @@ export class WikiBotService extends Service {
       try {
         this.bwikibot = await this.loginWithRetry(sitesConfig.bwiki);
       } catch (error) {
+        const errorMsg = getErrorMessage(error);
         logger.error(
           "bwiki 登录失败，服务将继续运行，但 bwiki 相关功能不可用",
-          error,
+          errorMsg,
         );
       }
 
@@ -161,7 +167,8 @@ export class WikiBotService extends Service {
         logger.error("WikiBotService 初始化失败，所有登录都失败");
       }
     } catch (error) {
-      logger.error("WikiBotService 初始化出错:", error);
+      const errorMsg = getErrorMessage(error);
+      logger.error("WikiBotService 初始化出错:", errorMsg);
     }
   }
 
@@ -184,7 +191,8 @@ export class WikiBotService extends Service {
       logger.info("✅ 成功重新登录 WIKIGG");
     } catch (error) {
       this.ggbot = null;
-      logger.error("❌ 重新登录 WIKIGG 失败", error);
+      const errorMsg = getErrorMessage(error);
+      logger.error("❌ 重新登录 WIKIGG 失败", errorMsg);
     }
 
     logger.info("开始重新登录 bwiki...");
@@ -194,7 +202,8 @@ export class WikiBotService extends Service {
       logger.info("✅ 成功重新登录 bwiki");
     } catch (error) {
       this.bwikibot = null;
-      logger.error("❌ 重新登录 bwiki 失败", error);
+      const errorMsg = getErrorMessage(error);
+      logger.error("❌ 重新登录 bwiki 失败", errorMsg);
     }
 
     if (this.ggbot && this.bwikibot) {

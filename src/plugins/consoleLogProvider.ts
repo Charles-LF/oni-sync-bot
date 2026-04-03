@@ -39,8 +39,8 @@ export class ConsoleLogProvider {
         if (record.name !== "oni-sync") return;
 
         logBuffer.push(record);
-        if (logBuffer.length > 100) {
-          logBuffer = logBuffer.slice(-100);
+        if (logBuffer.length > 1000) {
+          logBuffer = logBuffer.slice(-1000);
         }
 
         ctx.get("console")?.patch("onilogs", logBuffer);

@@ -3,7 +3,7 @@ import { sleep } from "koishi";
 import fetch from "node-fetch";
 import FormData from "form-data";
 import { Config } from "../index";
-import { logger } from "../utils/tools";
+import { logger, getErrorMessage } from "../utils/tools";
 
 // 配置项
 export const CONFIG = {
@@ -61,7 +61,8 @@ async function getImageInfo(
       size: imageInfo.size,
     };
   } catch (error) {
-    logger.error(`[GetImageInfo] 获取 ${fileName} 信息失败:`, error);
+    const errorMsg = getErrorMessage(error);
+    logger.error(`[GetImageInfo] 获取 ${fileName} 信息失败:`, errorMsg);
     return null;
   }
 }
@@ -114,12 +115,14 @@ async function deleteOldVersions(bot: Mwn, fileName: string): Promise<void> {
         });
         logger.info(`[SyncImg] 🗑️ 删除旧版本 ${revid} 成功`);
       } catch (error) {
-        logger.error(`[SyncImg] ❌ 删除旧版本 ${revid} 失败:`, error);
+        const errorMsg = getErrorMessage(error);
+        logger.error(`[SyncImg] ❌ 删除旧版本 ${revid} 失败:`, errorMsg);
         // 继续处理其他版本，不中断流程
       }
     }
   } catch (error) {
-    logger.error(`[SyncImg] ❌ 获取版本信息失败:`, error);
+    const errorMsg = getErrorMessage(error);
+    logger.error(`[SyncImg] ❌ 获取版本信息失败:`, errorMsg);
   }
 }
 
