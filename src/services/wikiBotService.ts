@@ -222,6 +222,30 @@ export class WikiBotService extends Service {
     return { gg: ggSuccess, bwiki: bwikiSuccess };
   }
 
+  private async reloginSite(site: "gg" | "bwiki"): Promise<void> {
+    const sitesConfig = this.getSitesConfig();
+    const siteConfig = site === "gg" ? sitesConfig.gg : sitesConfig.bwiki;
+
+    try {
+      const bot = await this.loginWithRetry(siteConfig);
+      if (site === "gg") {
+        this.ggbot = bot;
+      } else {
+        this.bwikibot = bot;
+      }
+      logger.info(`✅ ${siteConfig.name} 自动重新登录成功`);
+    } catch (error) {
+      const errorMsg = getErrorMessage(error);
+      if (site === "gg") {
+        this.ggbot = null;
+      } else {
+        this.bwikibot = null;
+      }
+      logger.error(`❌ ${siteConfig.name} 自动重新登录失败`, errorMsg);
+      throw error;
+    }
+  }
+
   isGGBotReady(): boolean {
     return this.ggbot !== null;
   }
@@ -230,18 +254,51 @@ export class WikiBotService extends Service {
     return this.bwikibot !== null;
   }
 
+  private createBotProxy(bot: Mwn, site: "gg" | "bwiki"): Mwn {
+    const self = this;
+    return new Proxy(bot, {
+      get(target: any, prop) {
+        const originalMethod = target[prop];
+        if (typeof originalMethod !== "function") {
+          return originalMethod;
+        }
+
+        return async function (...args: any[]) {
+          try {
+            return await originalMethod.apply(target, args);
+          } catch (error: any) {
+            if (error.code === "assertuserfailed") {
+              logger.warn(
+                `检测到 ${site === "gg" ? "WIKIGG" : "bwiki"} 登录过期，正在自动重新登录...`,
+              );
+              await self.reloginSite(site);
+              const newBot = site === "gg" ? self.ggbot : self.bwikibot;
+              if (!newBot) {
+                throw new Error(
+                  `${site === "gg" ? "WIKIGG" : "bwiki"} 自动重新登录失败`,
+                );
+              }
+              return await newBot[prop].apply(newBot, args);
+            }
+            throw error;
+          }
+        };
+      },
+    });
+  }
+
   getGGBot(): Mwn {
     if (!this.ggbot) {
       throw new Error("WIKIGG bot 尚未就绪，请检查登录配置或查看日志");
     }
-    return this.ggbot;
+    return this.createBotProxy(this.ggbot, "gg");
   }
 
   getBWikiBot(): Mwn {
     if (!this.bwikibot) {
       throw new Error("bwiki bot 尚未就绪，请检查登录配置或查看日志");
     }
-    return this.bwikibot;
+    return this.createBotProxy(this.bwikibot, "bwiki");
   }
 }
 

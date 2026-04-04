@@ -1,6 +1,5 @@
 import { Context, Logger } from "koishi";
 import { DataService } from "@koishijs/plugin-console";
-import { resolve } from "path";
 import {} from "@koishijs/plugin-console";
 
 declare module "@koishijs/console" {
@@ -26,11 +25,6 @@ export class ConsoleLogProvider {
   public static readonly inject = ["console"];
 
   constructor(ctx: Context) {
-    ctx.console.addEntry({
-      dev: resolve(__dirname, "../../client/index.ts"),
-      prod: resolve(__dirname, "../../dist"),
-    });
-
     ctx.plugin(PublicLogProvider);
 
     const target: Logger.Target = {

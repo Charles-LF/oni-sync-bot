@@ -1,4 +1,5 @@
 import { Context, Schema } from "koishi";
+import { resolve } from "path";
 import {
   WikiBotService,
   WikiBotServiceConfig,
@@ -36,4 +37,11 @@ export function apply(ctx: Context, config: Config) {
   ctx.plugin(SyncCommands, config);
   ctx.plugin(QueryCommands, config);
   ctx.plugin(UpdateCommands, config);
+
+  ctx.inject(["console"], (ctx) => {
+    ctx.console.addEntry({
+      dev: resolve(__dirname, "../client/index.ts"),
+      prod: resolve(__dirname, "../dist"),
+    });
+  });
 }
