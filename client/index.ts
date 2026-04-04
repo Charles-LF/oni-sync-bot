@@ -1,7 +1,9 @@
 import { Context } from "@koishijs/client";
 import Page from "./page.vue";
 import Calculator from "./Rocketcalculator/calculator.vue";
-import index from "./Rocketcalculator/index.vue";
+import CalculatorIndex from "./Rocketcalculator/index.vue";
+import TodoListIndex from "./onitodolist/index.vue";
+import TodoList from "./onitodolist/todolist.vue";
 
 export default (ctx: Context) => {
   ctx.page({
@@ -14,10 +16,19 @@ export default (ctx: Context) => {
   ctx.page({
     name: "火箭计算器",
     path: "/calculator",
-    component: index,
+    component: CalculatorIndex,
+  });
+  ctx.page({
+    name: "缺氧 TodoList",
+    path: "/onitodos",
+    component: TodoListIndex,
   });
   ctx.slot({
     type: "calculator",
     component: Calculator,
+  });
+  ctx.slot({
+    type: "onitodos",
+    component: TodoList,
   });
 };

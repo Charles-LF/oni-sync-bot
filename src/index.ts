@@ -10,6 +10,7 @@ import { RouteRedirect, RouteRedirectConfig } from "./plugins/routeRedirect";
 import { SyncCommands, SyncCommandsConfig } from "./plugins/syncCommands";
 import { QueryCommands, QueryCommandsConfig } from "./plugins/queryCommands";
 import { UpdateCommands, UpdateCommandsConfig } from "./plugins/updateCommands";
+import { TodoList } from "./plugins/todoList";
 
 export const name = "oni-sync-bot";
 
@@ -37,6 +38,7 @@ export function apply(ctx: Context, config: Config) {
   ctx.plugin(SyncCommands, config);
   ctx.plugin(QueryCommands, config);
   ctx.plugin(UpdateCommands, config);
+  ctx.plugin(TodoList);
 
   ctx.inject(["console"], (ctx) => {
     ctx.console.addEntry({
