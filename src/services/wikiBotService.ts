@@ -256,11 +256,56 @@ export class WikiBotService extends Service {
 
   private createBotProxy(bot: Mwn, site: "gg" | "bwiki"): Mwn {
     const self = this;
+    
+    const METHODS_TO_SKIP = new Set([
+      "cookieJar",
+      "setRequestOptions",
+    ]);
+
     return new Proxy(bot, {
       get(target: any, prop) {
         const originalMethod = target[prop];
         if (typeof originalMethod !== "function") {
           return originalMethod;
+        }
+
+        if (METHODS_TO_SKIP.has(prop as string)) {
+          return originalMethod.bind(target);
+        }
+
+        if (prop === "continuedQueryGen") {
+          return function (...args: any[]) {
+            const originalGen = originalMethod.apply(target, args);
+            return {
+              [Symbol.asyncIterator]() {
+                const it = originalGen[Symbol.asyncIterator]();
+                return {
+                  async next() {
+                    try {
+                      return await it.next();
+                    } catch (error: any) {
+                      if (error.code === "assertuserfailed") {
+                        logger.warn(
+                          `检测到 ${site === "gg" ? "WIKIGG" : "bwiki"} 登录过期，正在自动重新登录...`,
+                        );
+                        await self.reloginSite(site);
+                        const newBot = site === "gg" ? self.ggbot : self.bwikibot;
+                        if (!newBot) {
+                          throw new Error(
+                            `${site === "gg" ? "WIKIGG" : "bwiki"} 自动重新登录失败`,
+                          );
+                        }
+                        const newGen = newBot.continuedQueryGen(...args);
+                        const newIt = newGen[Symbol.asyncIterator]();
+                        return await newIt.next();
+                      }
+                      throw error;
+                    }
+                  },
+                };
+              },
+            };
+          };
         }
 
         return async function (...args: any[]) {
