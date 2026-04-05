@@ -6,6 +6,7 @@ import { pinyin } from "pinyin-pro";
 const CROSS_SITE_LINK_REGEX: RegExp = /\[\[(en|ru|pt-br):[^\]]*\]\]/g; // 跨站链接正则
 const DEV_TEXT_REGEX: RegExp = /(?<!\w)Dev:/g; // 匹配所有 Dev: 字符串的全局正则
 const MODULE_NAMESPACE_PREFIX = "Module:Dev/"; // 目标替换前缀
+const logger = new Logger("oni-sync");
 
 /**
  * 移除跨站链接 + 替换所有 Dev: 为 Module:Dev/
@@ -32,14 +33,68 @@ async function getAndProcessPageContent(
   pageTitle: string,
 ): Promise<string> {
   try {
-    const res = await site.read(pageTitle);
-    const rawText = res.revisions[0]?.content || "";
+    let rawText = "";
+
+    try {
+      const res = await site.read(pageTitle);
+
+      if (res) {
+        if (typeof res === "string") {
+          rawText = res;
+        } else if (
+          res.revisions &&
+          res.revisions.length > 0 &&
+          res.revisions[0].content
+        ) {
+          rawText = res.revisions[0].content;
+        } else if (res.content) {
+          rawText = res.content;
+        } else if (res.wikitext) {
+          rawText = res.wikitext;
+        } else if (res.query && res.query.pages) {
+          const pageIds = Object.keys(res.query.pages);
+          if (pageIds.length > 0) {
+            const page = res.query.pages[pageIds[0]];
+            if (page.revisions && page.revisions.length > 0) {
+              rawText = page.revisions[0].content || "";
+            }
+          }
+        }
+      }
+    } catch (readErr) {
+      try {
+        const queryRes = await site.query({
+          action: "query",
+          titles: pageTitle,
+          prop: "revisions",
+          rvprop: "content",
+          rvlimit: 1,
+        });
+
+        if (queryRes && queryRes.query && queryRes.query.pages) {
+          const pageIds = Object.keys(queryRes.query.pages);
+          if (pageIds.length > 0) {
+            const page = queryRes.query.pages[pageIds[0]];
+            if (page.revisions && page.revisions.length > 0) {
+              rawText = page.revisions[0].content || "";
+            }
+          }
+        }
+      } catch (backupErr) {
+        throw readErr;
+      }
+    }
 
     const processedText = clean_page_text(rawText);
 
     return processedText.trimEnd();
   } catch (err) {
-    throw new Error(`[${pageTitle}] 内容获取失败: ${err}`);
+    const errMsg = err instanceof Error ? err.message : String(err);
+    logger.error(
+      `[getAndProcessPageContent] [${pageTitle}] 内容获取失败:`,
+      errMsg,
+    );
+    throw new Error(`[${pageTitle}] 内容获取失败: ${errMsg}`);
   }
 }
 
@@ -84,6 +139,9 @@ function getErrorMessage(error: unknown): string {
   return String(error);
 }
 
-const logger = new Logger("oni-sync");
-
-export { getAndProcessPageContent, generatePinyinInfo, logger, getErrorMessage };
+export {
+  getAndProcessPageContent,
+  generatePinyinInfo,
+  logger,
+  getErrorMessage,
+};

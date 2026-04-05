@@ -652,4 +652,137 @@ async function deleteTodo(todo: TodoItem) {
     }
   }
 }
+
+@media (max-width: 768px) {
+  .todo-app {
+    padding: 10px;
+  }
+
+  .todo-header {
+    flex-direction: column;
+    gap: 15px;
+    align-items: stretch;
+  }
+
+  .todo-title {
+    font-size: 32px;
+    letter-spacing: 2px;
+    justify-content: center;
+  }
+
+  .title-dot {
+    font-size: 12px;
+  }
+
+  .button-group {
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+
+  .cute-btn {
+    font-size: 14px;
+    padding: 8px 12px;
+  }
+
+  .todo-stats {
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 10px;
+  }
+
+  :deep(.el-statistic) {
+    text-align: center;
+  }
+
+  :deep(.el-statistic__content) {
+    font-size: 18px;
+  }
+
+  .search-filter-section {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .search-input {
+    min-width: auto;
+    width: 100%;
+  }
+
+  .filter-buttons {
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+
+  .filter-btn {
+    padding: 6px 14px;
+    font-size: 14px;
+  }
+
+  .todo-table-card {
+    border-radius: 10px;
+    box-shadow: 4px 4px 0 #333;
+  }
+
+  :deep(.el-dialog) {
+    width: 95% !important;
+    margin: 5vh auto !important;
+    max-width: 400px;
+  }
+
+  :deep(.el-dialog__header) {
+    padding: 12px 16px;
+  }
+
+  :deep(.el-dialog__body) {
+    padding: 15px;
+  }
+
+  .pagination-section {
+    padding: 15px 10px;
+  }
+
+  :deep(.el-pagination) {
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 8px;
+
+    .el-pagination__sizes,
+    .el-pagination__jump {
+      margin: 0;
+    }
+
+    button,
+    li {
+      min-width: 32px;
+      height: 32px;
+      line-height: 28px;
+      padding: 0 8px;
+    }
+  }
+}
+
+@media (max-width: 480px) {
+  .todo-title {
+    font-size: 24px;
+    letter-spacing: 1px;
+  }
+
+  .title-dot {
+    font-size: 10px;
+  }
+
+  .cute-btn {
+    font-size: 13px;
+    padding: 7px 10px;
+  }
+
+  .filter-btn {
+    padding: 5px 12px;
+    font-size: 13px;
+  }
+
+  :deep(.el-dialog) {
+    width: 92% !important;
+  }
+}
 </style>

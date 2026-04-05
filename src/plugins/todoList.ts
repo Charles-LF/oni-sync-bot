@@ -70,21 +70,21 @@ export class TodoList {
 
   private registerCommands(ctx: Context) {
     ctx
-      .command("todolist", "缺氧 TodoList", { authority: 1 })
+      .command("todolist", "缺氧 TodoList")
       .alias("todo")
       .action(async ({ session }) => {
         await session.execute("todo.list");
       });
 
     ctx
-      .command("todo.list", "查看 TodoList", { authority: 1 })
+      .command("todo.list", "查看 TodoList")
       .alias("todo.l")
       .action(async ({ session }) => {
         return "📋 请访问 https://klei.vip/onitodos 进行 TodoList 管理";
       });
 
     ctx
-      .command("todo.add <title>", "添加待办事项", { authority: 1 })
+      .command("todo.add <title>", "添加待办事项")
       .alias("todo.a")
       .option("content", "-c <content>")
       .option("createdBy", "-u <createdBy>")
@@ -110,7 +110,7 @@ export class TodoList {
       });
 
     ctx
-      .command("todo.edit <id>", "编辑待办事项", { authority: 1 })
+      .command("todo.edit <id>", "编辑待办事项")
       .alias("todo.e")
       .option("title", "-t <title>")
       .option("content", "-c <content>")
@@ -144,7 +144,7 @@ export class TodoList {
       });
 
     ctx
-      .command("todo.complete <id>", "标记待办事项为完成", { authority: 1 })
+      .command("todo.complete <id>", "标记待办事项为完成")
       .alias("todo.c")
       .action(async ({ session }, idStr) => {
         const id = Number(idStr);
@@ -170,7 +170,7 @@ export class TodoList {
       });
 
     ctx
-      .command("todo.uncomplete <id>", "标记待办事项为未完成", { authority: 1 })
+      .command("todo.uncomplete <id>", "标记待办事项为未完成")
       .alias("todo.u")
       .action(async ({ session }, idStr) => {
         const id = Number(idStr);
@@ -196,7 +196,7 @@ export class TodoList {
       });
 
     ctx
-      .command("todo.delete <id>", "删除待办事项", { authority: 2 })
+      .command("todo.delete <id>", "删除待办事项")
       .alias("todo.d")
       .action(async ({ session }, idStr) => {
         const id = Number(idStr);
@@ -232,59 +232,43 @@ export class TodoList {
   }
 
   private registerConsoleEvents(ctx: Context) {
-    ctx.console.addListener(
-      "onitodos/list",
-      async () => {
-        const todos = await ctx.database.get("onitodos", {});
-        return todos;
-      },
-      { authority: 1 },
-    );
+    ctx.console.addListener("onitodos/list", async () => {
+      const todos = await ctx.database.get("onitodos", {});
+      return todos;
+    });
 
-    ctx.console.addListener(
-      "onitodos/add",
-      async (data) => {
-        const todo = await ctx.database.create("onitodos", {
-          title: data.title,
-          content: data.content || "",
-          completed: false,
-          createdBy: data.createdBy || "默认创建人",
-          createdAt: new Date(),
-          updatedAt: new Date(),
-        });
-        this.log.info(`控制台添加待办事项成功: ${data.title}`);
-        return todo;
-      },
-      { authority: 1 },
-    );
+    ctx.console.addListener("onitodos/add", async (data) => {
+      const todo = await ctx.database.create("onitodos", {
+        title: data.title,
+        content: data.content || "",
+        completed: false,
+        createdBy: data.createdBy || "默认创建人",
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+      this.log.info(`控制台添加待办事项成功: ${data.title}`);
+      return todo;
+    });
 
-    ctx.console.addListener(
-      "onitodos/update",
-      async (data) => {
-        const updateData: Partial<OniTodoItem> = {
-          updatedAt: new Date(),
-        };
-        if (data.title !== undefined) updateData.title = data.title;
-        if (data.content !== undefined) updateData.content = data.content;
-        if (data.completed !== undefined) updateData.completed = data.completed;
-        if (data.createdBy !== undefined) updateData.createdBy = data.createdBy;
+    ctx.console.addListener("onitodos/update", async (data) => {
+      const updateData: Partial<OniTodoItem> = {
+        updatedAt: new Date(),
+      };
+      if (data.title !== undefined) updateData.title = data.title;
+      if (data.content !== undefined) updateData.content = data.content;
+      if (data.completed !== undefined) updateData.completed = data.completed;
+      if (data.createdBy !== undefined) updateData.createdBy = data.createdBy;
 
-        await ctx.database.set("onitodos", { id: data.id }, updateData);
-        this.log.info(`控制台更新待办事项成功: ID ${data.id}`);
-        return { success: true };
-      },
-      { authority: 1 },
-    );
+      await ctx.database.set("onitodos", { id: data.id }, updateData);
+      this.log.info(`控制台更新待办事项成功: ID ${data.id}`);
+      return { success: true };
+    });
 
-    ctx.console.addListener(
-      "onitodos/delete",
-      async (data) => {
-        await ctx.database.remove("onitodos", { id: data.id });
-        this.log.info(`控制台删除待办事项成功: ID ${data.id}`);
-        return { success: true };
-      },
-      { authority: 1 },
-    );
+    ctx.console.addListener("onitodos/delete", async (data) => {
+      await ctx.database.remove("onitodos", { id: data.id });
+      this.log.info(`控制台删除待办事项成功: ID ${data.id}`);
+      return { success: true };
+    });
   }
 }
 
