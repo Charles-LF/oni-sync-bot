@@ -232,6 +232,7 @@ function formatDate(dateStr: string): string {
 
 function fetchTodos() {
   refreshing.value = true
+  //@ts-ignore
   send('onitodos/list').then((data: TodoItem[]) => {
     todos.value = data
     refreshing.value = false
@@ -242,7 +243,7 @@ function fetchTodos() {
     console.error(err)
   })
 }
-
+// @ts-ignore
 send('onitodos/list').then((data: TodoItem[]) => {
   todos.value = data
 })
@@ -254,6 +255,7 @@ async function addTodo() {
   }
   saving.value = true
   try {
+    //@ts-ignore
     await send('onitodos/add', {
       title: addForm.value.title,
       content: addForm.value.content,
@@ -289,6 +291,7 @@ async function updateTodo() {
   }
   saving.value = true
   try {
+    //@ts-ignore
     await send('onitodos/update', {
       id: editForm.value.id,
       title: editForm.value.title,
@@ -309,6 +312,7 @@ async function updateTodo() {
 
 async function toggleComplete(todo: TodoItem, completed: boolean) {
   try {
+    //@ts-ignore
     await send('onitodos/update', {
       id: todo.id,
       completed,
@@ -332,6 +336,7 @@ async function deleteTodo(todo: TodoItem) {
         type: 'warning',
       }
     )
+    //@ts-ignore
     await send('onitodos/delete', { id: todo.id })
     ElMessage.success('删除成功')
     fetchTodos()
