@@ -69,7 +69,7 @@
               {{ formatDate(row.createdAt) }}
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="200" fixed="right">
+          <el-table-column label="操作" width="150" fixed="right">
             <template #default="{ row }">
               <el-button v-if="!row.completed" size="small" type="success" class="cute-btn"
                 @click="toggleComplete(row, true)">
@@ -80,9 +80,6 @@
               </el-button>
               <el-button size="small" type="primary" class="cute-btn" @click="editTodo(row)">
                 编辑
-              </el-button>
-              <el-button size="small" type="danger" class="cute-btn" @click="deleteTodo(row)">
-                删除
               </el-button>
             </template>
           </el-table-column>
@@ -147,7 +144,7 @@
 
 <script lang="ts" setup>
 import { computed, ref } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { Plus, Refresh } from '@element-plus/icons-vue'
 import { send } from '@koishijs/client'
 
@@ -322,29 +319,6 @@ async function toggleComplete(todo: TodoItem, completed: boolean) {
   } catch (err) {
     ElMessage.error('操作失败')
     console.error(err)
-  }
-}
-
-async function deleteTodo(todo: TodoItem) {
-  try {
-    await ElMessageBox.confirm(
-      `确定要删除待办事项 "${todo.title}" 吗？`,
-      '确认删除',
-      {
-        confirmButtonText: '确定',
-        cancelButtonText: '取消',
-        type: 'warning',
-      }
-    )
-    //@ts-ignore
-    await send('onitodos/delete', { id: todo.id })
-    ElMessage.success('删除成功')
-    fetchTodos()
-  } catch (err) {
-    if (err !== 'cancel') {
-      ElMessage.error('删除失败')
-      console.error(err)
-    }
   }
 }
 </script>
