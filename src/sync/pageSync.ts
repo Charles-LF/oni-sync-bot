@@ -5,7 +5,7 @@ import { sleep } from "koishi";
 import { syncSingleImage } from "./imgSync";
 
 const CONFIG = {
-  IGNORED_PAGES: new Set(["教程", "MediaWiki:Common.css"]),
+  IGNORED_PAGES: new Set(["教程", "MediaWiki:Common.css", "首页", "Main Page"]),
   SYNC_INTERVAL_SUCCESS: 500,
   SYNC_INTERVAL_FAILED: 1000,
   NAMESPACE: 0,

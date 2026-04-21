@@ -36,7 +36,9 @@ async function getAndProcessPageContent(
     let rawText = "";
 
     try {
-      const res = await site.read(pageTitle);
+      const res = await site.read(pageTitle, {
+        redirects: false, // 不自动跟随重定向
+      });
 
       if (res) {
         if (typeof res === "string") {
