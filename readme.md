@@ -156,12 +156,12 @@ yarn add koishi-plugin-oni-sync-bot
 koishi-plugin-oni-sync-bot/
 ├── src/
 │   ├── services/         # 服务层
-│   │   └── wikiBotService.ts    # Wiki 机器人服务
+│   │   ├── wikiBotService.ts    # Wiki 机器人服务
+│   │   └── consoleLogProvider.ts # 日志控制台服务
 │   ├── plugins/          # 插件层
 │   │   ├── queryCommands.ts     # 查询命令插件
 │   │   ├── syncCommands.ts      # 同步命令插件
 │   │   ├── updateCommands.ts    # 更新命令插件
-│   │   ├── consoleLogProvider.ts # 日志控制台插件
 │   │   ├── todoList.ts          # TodoList 插件
 │   │   ├── databaseExtension.ts  # 数据库扩展
 │   │   └── routeRedirect.ts     # 路由重定向

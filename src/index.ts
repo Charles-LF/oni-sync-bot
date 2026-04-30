@@ -4,7 +4,7 @@ import {
   WikiBotService,
   WikiBotServiceConfig,
 } from "./services/wikiBotService";
-import { ConsoleLogProvider } from "./plugins/consoleLogProvider";
+import { ConsoleLogProvider } from "./services/consoleLogProvider";
 import { DatabaseExtension } from "./plugins/databaseExtension";
 import { RouteRedirect, RouteRedirectConfig } from "./plugins/routeRedirect";
 import { SyncCommands, SyncCommandsConfig } from "./plugins/syncCommands";
