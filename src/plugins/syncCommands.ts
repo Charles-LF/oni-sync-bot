@@ -19,18 +19,14 @@ export interface SyncCommandsConfig {
 export class SyncCommands {
   public static readonly inject = ["wikiBot", "cron"];
   public config: SyncCommandsConfig;
-  public log: Logger;
 
   constructor(ctx: Context, config: SyncCommandsConfig) {
     this.config = config;
-    this.log = ctx.logger("oni-sync");
     logger.info("WikiBot 服务已就绪，初始化定时任务和指令");
 
     ctx.cron("15 * * * *", async () => {
-      if (!ctx.wikiBot.isGGBotReady() || !ctx.wikiBot.isBWikiBotReady()) {
-        logger.warn("增量更新跳过：Wiki 机器人未就绪");
-        return;
-      }
+      if (!(await this.ensureBotsReady(ctx, "增量更新"))) return;
+
       await incrementalUpdate(
         ctx.wikiBot.getGGBot(),
         ctx.wikiBot.getBWikiBot(),
@@ -39,25 +35,20 @@ export class SyncCommands {
     });
 
     ctx.cron("30 8 * * 4", async () => {
-      if (!ctx.wikiBot.isGGBotReady() || !ctx.wikiBot.isBWikiBotReady()) {
-        logger.warn("同步所有页面跳过：Wiki 机器人未就绪");
-        return;
-      }
+      if (!(await this.ensureBotsReady(ctx, "同步所有页面"))) return;
+
       await syncPages(ctx.wikiBot.getGGBot(), ctx.wikiBot.getBWikiBot())
         .then(() => {
           logger.info("自动任务：尝试同步所有页面，从 WIKIGG 到 bwiki");
         })
         .catch((err) => {
-          logger.error(`同步所有页面失败`);
-          this.log.error(`，错误信息：${err}`);
+          logger.error(`同步所有页面失败，错误信息：${err}`);
         });
     });
 
     ctx.cron("30 8 * * 3", async () => {
-      if (!ctx.wikiBot.isGGBotReady() || !ctx.wikiBot.isBWikiBotReady()) {
-        logger.warn("同步所有图片跳过：Wiki 机器人未就绪");
-        return;
-      }
+      if (!(await this.ensureBotsReady(ctx, "同步所有图片"))) return;
+
       await syncAllImages(
         ctx.wikiBot.getGGBot(),
         ctx.wikiBot.getBWikiBot(),
@@ -67,43 +58,67 @@ export class SyncCommands {
           logger.info("自动任务：尝试同步所有图片，从 WIKIGG 到 bwiki");
         })
         .catch((err) => {
-          logger.error(`同步所有图片失败`);
-          this.log.error(`，错误信息：${err}`);
+          logger.error(`同步所有图片失败，错误信息：${err}`);
         });
     });
 
     this.registerCommands(ctx);
   }
 
-  private checkBotsReady(ctx: Context): boolean {
-    const ggReady = ctx.wikiBot.isGGBotReady();
-    const bwReady = ctx.wikiBot.isBWikiBotReady();
+  /**
+   * 确保机器人就绪，如果未就绪则尝试重新登录
+   * @param ctx Koishi 上下文
+   * @param taskName 任务名称（用于日志）
+   * @returns 机器人是否已就绪
+   */
+  private async ensureBotsReady(
+    ctx: Context,
+    taskName: string,
+  ): Promise<boolean> {
+    // 检查并尝试重新登录失效的机器人
+    if (!ctx.wikiBot.isGGBotReady() || !ctx.wikiBot.isBWikiBotReady()) {
+      logger.warn(`检测到部分机器人未就绪，尝试重新登录...`);
+      try {
+        await ctx.wikiBot.relogin();
+      } catch (error) {
+        logger.error(`重新登录失败: ${error}`);
+        return false;
+      }
+    }
 
-    return ggReady && bwReady;
+    // 最终检查机器人是否真正就绪
+    const ggReady = ctx.wikiBot.isGGBotReady();
+    const bwikiReady = ctx.wikiBot.isBWikiBotReady();
+
+    if (!ggReady || !bwikiReady) {
+      logger.warn(
+        `${taskName} 跳过：Wiki 机器人仍未就绪 - WIKIGG: ${ggReady ? "✅" : "❌"}, bwiki: ${bwikiReady ? "✅" : "❌"}`,
+      );
+      return false;
+    }
+
+    return true;
   }
 
   private registerCommands(ctx: Context) {
     ctx
       .command("sync <pageTitle:string>", "同步指定页面", { authority: 2 })
       .action(async ({ session }, pageTitle) => {
-        if (!this.checkBotsReady(ctx)) {
-          return session.send("❌ Wiki 机器人未就绪，请检查登录配置或查看日志");
+        if (!(await this.ensureBotsReady(ctx, "同步页面"))) {
+          return "❌ Wiki 机器人未就绪，请检查登录配置或查看日志";
         }
-        await syncSinglePage(
-          ctx.wikiBot.getGGBot(),
-          ctx.wikiBot.getBWikiBot(),
-          pageTitle,
-          "sync-bot",
-        )
-          .then(() => {
-            session.send(
-              `✅ 已尝试同步页面：${pageTitle}，请前往控制台查看：${this.config.logsUrl}`,
-            );
-          })
-          .catch((err) => {
-            session.send(`❌ 同步页面失败：${pageTitle}`);
-            this.log.error(`，错误信息：${err}`);
-          });
+        try {
+          await syncSinglePage(
+            ctx.wikiBot.getGGBot(),
+            ctx.wikiBot.getBWikiBot(),
+            pageTitle,
+            "sync-bot",
+          );
+          return `✅ 已尝试同步页面：${pageTitle}，请前往控制台查看：${this.config.logsUrl}`;
+        } catch (err) {
+          logger.error(`同步页面 ${pageTitle} 失败，错误信息：${err}`);
+          return `❌ 同步页面失败：${pageTitle}`;
+        }
       });
 
     ctx
@@ -112,51 +127,35 @@ export class SyncCommands {
       })
       .alias("增量更新")
       .action(async ({ session }) => {
-        if (!this.checkBotsReady(ctx)) {
-          return session.send("❌ Wiki 机器人未就绪，请检查登录配置或查看日志");
+        if (!(await this.ensureBotsReady(ctx, "增量更新"))) {
+          return "❌ Wiki 机器人未就绪，请检查登录配置或查看日志";
         }
-        session.send(
-          `🚀 获取3h内的编辑并尝试更新，任务耗时可能较长，请前往控制台查看日志:${this.config.logsUrl}`,
-        );
-        await incrementalUpdate(
-          ctx.wikiBot.getGGBot(),
-          ctx.wikiBot.getBWikiBot(),
-          this.config,
-        )
-          .then(() => {
-            session.send(
-              `✅ 已尝试获取三小时前的编辑并同步，请前往控制台查看：${this.config.logsUrl}`,
-            );
-          })
-          .catch((err) => {
-            session.send(
-              `❌ 同步所有页面失败，请前往控制台查看日志:${this.config.logsUrl}`,
-            );
-            this.log.error(`同步所有页面失败，错误信息：${err}`);
-          });
+        try {
+          await incrementalUpdate(
+            ctx.wikiBot.getGGBot(),
+            ctx.wikiBot.getBWikiBot(),
+            this.config,
+          );
+          return `✅ 已尝试获取三小时前的编辑并同步，请前往控制台查看：${this.config.logsUrl}`;
+        } catch (err) {
+          logger.error(`增量更新失败，错误信息：${err}`);
+          return `❌ 增量更新失败，请前往控制台查看日志：${this.config.logsUrl}`;
+        }
       });
 
     ctx
       .command("sync.allpages", "同步所有页面", { authority: 2 })
       .action(async ({ session }) => {
-        if (!this.checkBotsReady(ctx)) {
-          return session.send("❌ Wiki 机器人未就绪，请检查登录配置或查看日志");
+        if (!(await this.ensureBotsReady(ctx, "同步所有页面"))) {
+          return "❌ Wiki 机器人未就绪，请检查登录配置或查看日志";
         }
-        session.send(
-          `🚀 开始同步所有页面，任务耗时较长，请前往控制台查看日志:${this.config.logsUrl}`,
-        );
-        await syncPages(ctx.wikiBot.getGGBot(), ctx.wikiBot.getBWikiBot())
-          .then(() => {
-            session.send(
-              `✅ 已尝试同步所有页面，请前往控制台查看：${this.config.logsUrl}`,
-            );
-          })
-          .catch((err) => {
-            session.send(
-              `❌ 同步所有页面失败，请前往控制台查看日志:${this.config.logsUrl}`,
-            );
-            this.log.error(`同步所有页面失败，错误信息：${err}`);
-          });
+        try {
+          await syncPages(ctx.wikiBot.getGGBot(), ctx.wikiBot.getBWikiBot());
+          return `✅ 已尝试同步所有页面，请前往控制台查看：${this.config.logsUrl}`;
+        } catch (err) {
+          logger.error(`同步所有页面失败，错误信息：${err}`);
+          return `❌ 同步所有页面失败，请前往控制台查看日志:${this.config.logsUrl}`;
+        }
       });
 
     ctx
@@ -164,101 +163,75 @@ export class SyncCommands {
         authority: 2,
       })
       .action(async ({ session }, moduleTitle) => {
-        if (!this.checkBotsReady(ctx)) {
-          return session.send("❌ Wiki 机器人未就绪，请检查登录配置或查看日志");
+        if (!(await this.ensureBotsReady(ctx, "同步模块"))) {
+          return "❌ Wiki 机器人未就绪，请检查登录配置或查看日志";
         }
-        await session.send(
-          `✅ 同步中，请前往控制台查看：${this.config.logsUrl}`,
-        );
-        await syncSingleModule(
-          ctx.wikiBot.getGGBot(),
-          ctx.wikiBot.getBWikiBot(),
-          moduleTitle,
-          "sync-bot",
-        )
-          .then(() => {
-            session.send(
-              `✅ 已尝试同步模块：${moduleTitle}，请前往控制台查看：${this.config.logsUrl}`,
-            );
-          })
-          .catch((err) => {
-            session.send(`❌ 同步模块失败：${moduleTitle}`);
-            this.log.error(`错误信息：${err}`);
-          });
+        try {
+          await syncSingleModule(
+            ctx.wikiBot.getGGBot(),
+            ctx.wikiBot.getBWikiBot(),
+            moduleTitle,
+            "sync-bot",
+          );
+          return `✅ 已尝试同步模块：${moduleTitle}，请前往控制台查看：${this.config.logsUrl}`;
+        } catch (err) {
+          logger.error(`同步模块 ${moduleTitle} 失败，错误信息：${err}`);
+          return `❌ 同步模块失败：${moduleTitle}`;
+        }
       });
 
     ctx
       .command("sync.allmodules", "同步所有模块", { authority: 2 })
       .action(async ({ session }) => {
-        if (!this.checkBotsReady(ctx)) {
-          return session.send("❌ Wiki 机器人未就绪，请检查登录配置或查看日志");
+        if (!(await this.ensureBotsReady(ctx, "同步所有模块"))) {
+          return "❌ Wiki 机器人未就绪，请检查登录配置或查看日志";
         }
-        await session.send(
-          `🚀 开始同步所有模块，任务耗时较长，请前往控制台查看：${this.config.logsUrl}`,
-        );
-        await syncModules(ctx.wikiBot.getGGBot(), ctx.wikiBot.getBWikiBot())
-          .then(() => {
-            session.send(
-              `✅ 已尝试同步所有模块，请前往控制台查看：${this.config.logsUrl}`,
-            );
-          })
-          .catch((err) => {
-            session.send(
-              `❌ 同步所有模块失败，请前往控制台查看日志:${this.config.logsUrl}`,
-            );
-            this.log.error(`同步所有模块失败，错误信息：${err}`);
-          });
+        try {
+          await syncModules(ctx.wikiBot.getGGBot(), ctx.wikiBot.getBWikiBot());
+          return `✅ 已尝试同步所有模块，请前往控制台查看：${this.config.logsUrl}`;
+        } catch (err) {
+          logger.error(`同步所有模块失败，错误信息：${err}`);
+          return `❌ 同步所有模块失败，请前往控制台查看日志:${this.config.logsUrl}`;
+        }
       });
 
     ctx
       .command("sync.img <imgTitle:string>", "同步指定图片", { authority: 2 })
       .action(async ({ session }, imgTitle) => {
-        if (!this.checkBotsReady(ctx)) {
-          return session.send("❌ Wiki 机器人未就绪，请检查登录配置或查看日志");
+        if (!(await this.ensureBotsReady(ctx, "同步图片"))) {
+          return "❌ Wiki 机器人未就绪，请检查登录配置或查看日志";
         }
-        await session.send(
-          `🚀 开始同步，任务可能耗时较长，请前往控制台查看：${this.config.logsUrl}`,
-        );
-        await syncSingleImage(
-          ctx.wikiBot.getGGBot(),
-          ctx.wikiBot.getBWikiBot(),
-          `${imgTitle.startsWith("File:") ? "" : "File:"}${imgTitle}`,
-          this.config,
-        )
-          .then(() => {
-            session.send(`✅ 已尝试同步图片：${imgTitle}`);
-          })
-          .catch((err) => {
-            session.send(`❌ 同步图片失败：${imgTitle}`);
-            this.log.error(`同步图片失败：${imgTitle}，错误信息：${err}`);
-          });
+        try {
+          await syncSingleImage(
+            ctx.wikiBot.getGGBot(),
+            ctx.wikiBot.getBWikiBot(),
+            `${imgTitle.startsWith("File:") ? "" : "File:"}${imgTitle}`,
+            this.config,
+          );
+          return `✅ 已尝试同步图片：${imgTitle}`;
+        } catch (err) {
+          logger.error(`同步图片 ${imgTitle} 失败，错误信息：${err}`);
+          return `❌ 同步图片失败：${imgTitle}`;
+        }
       });
 
     ctx
       .command("sync.allimgs", "同步所有图片", { authority: 2 })
       .action(async ({ session }) => {
-        if (!this.checkBotsReady(ctx)) {
-          return session.send("❌ Wiki 机器人未就绪，请检查登录配置或查看日志");
+        if (!(await this.ensureBotsReady(ctx, "同步所有图片"))) {
+          return "❌ Wiki 机器人未就绪，请检查登录配置或查看日志";
         }
-        session.send(
-          `🚀 开始同步所有图片，任务耗时较长，请前往控制台查看：${this.config.logsUrl}`,
-        );
-        await syncAllImages(
-          ctx.wikiBot.getGGBot(),
-          ctx.wikiBot.getBWikiBot(),
-          this.config,
-        )
-          .then(() => {
-            session.send(
-              `✅ 已尝试同步所有图片，请前往控制台查看：${this.config.logsUrl}`,
-            );
-          })
-          .catch((err) => {
-            session.send(
-              `❌ 同步所有图片失败，请前往控制台查看日志:${this.config.logsUrl}`,
-            );
-            this.log.error(`同步所有图片失败，错误信息：${err}`);
-          });
+        try {
+          await syncAllImages(
+            ctx.wikiBot.getGGBot(),
+            ctx.wikiBot.getBWikiBot(),
+            this.config,
+          );
+          return `✅ 已尝试同步所有图片，请前往控制台查看：${this.config.logsUrl}`;
+        } catch (err) {
+          logger.error(`同步所有图片失败，错误信息：${err}`);
+          return `❌ 同步所有图片失败，请前往控制台查看日志:${this.config.logsUrl}`;
+        }
       });
   }
 }

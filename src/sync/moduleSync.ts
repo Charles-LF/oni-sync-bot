@@ -7,7 +7,7 @@ import {
 import { sleep } from "koishi";
 
 const CONFIG = {
-  MODLE_NAMESPACE: 828, // 模块命名空间 (注意：这里原代码拼写为 MODLE，保留原样)
+  MODULE_NAMESPACE: 828, // 模块命名空间
   IGNORED_MODULES: [], // 忽略的模块列表
   SYNC_INTERVAL_SUCCESS: 500, // 同步成功后等待时间（毫秒）
   SYNC_INTERVAL_FAILED: 1000, // 同步失败后等待时间（毫秒）
@@ -78,13 +78,13 @@ async function syncSingleModule(
  */
 async function getAllModules(site: Mwn): Promise<string[]> {
   logger.info(
-    `[SyncAllModules] 📥 开始获取原站点所有模块（命名空间${CONFIG.MODLE_NAMESPACE}）`,
+    `[SyncAllModules] 📥 开始获取原站点所有模块（命名空间${CONFIG.MODULE_NAMESPACE}）`,
   );
   const allModules: string[] = [];
   const queryGen = site.continuedQueryGen({
     action: "query",
     list: "allpages",
-    apnamespace: CONFIG.MODLE_NAMESPACE, // 模块命名空间
+    apnamespace: CONFIG.MODULE_NAMESPACE, // 模块命名空间
     aplimit: "max",
     apdir: "ascending",
   });
@@ -111,7 +111,6 @@ async function syncModules(oldSite: Mwn, newSite: Mwn): Promise<void> {
     // 获取原站点所有页面
     const oldModuleList = await getAllModules(oldSite);
     const total = oldModuleList.length;
-    console.log(oldModuleList);
     if (total === 0) {
       logger.info(`[SyncAllModules] 📭 原站点无模块可同步，结束`);
       return;
