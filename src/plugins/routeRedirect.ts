@@ -40,6 +40,13 @@ export class RouteRedirect {
       )}`;
       router.redirect(targetUrl);
     });
+
+    ctx.server.get("/ggwiki/*", async (router) => {
+      const suffix = router.params[""] || "";
+      const queryString = router.querystring ? `?${router.querystring}` : "";
+      const targetUrl = `https://${this.config.main_site}/${suffix}${queryString}`;
+      router.redirect(targetUrl);
+    });
   }
 }
 
