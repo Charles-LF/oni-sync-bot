@@ -65,32 +65,20 @@ export class WikiBotService extends Service {
     attempt = 1,
   ): Promise<Mwn> {
     try {
-      logger.info(
-        `正在登录 ${siteConfig.name}... (尝试 ${attempt}/${WikiBotService.MAX_RETRIES})`,
-      );
       const bot = await this.login(siteConfig);
       return bot;
     } catch (error) {
       const errorMsg = getErrorMessage(error);
       if (attempt < WikiBotService.MAX_RETRIES) {
-        logger.warn(
-          `登录 ${siteConfig.name} 失败，${WikiBotService.RETRY_DELAY / 1000}秒后重试...`,
-          errorMsg,
-        );
         await this.delay(WikiBotService.RETRY_DELAY);
         return this.loginWithRetry(siteConfig, attempt + 1);
       }
-      logger.error(
-        `登录 ${siteConfig.name} 失败，已达到最大重试次数`,
-        errorMsg,
-      );
+      logger.error(`❌ ${siteConfig.name} 登录失败`, errorMsg);
       throw error;
     }
   }
 
   private async login(siteConfig: ISiteConfig): Promise<Mwn> {
-    logger.info(`正在连接 ${siteConfig.name} API: ${siteConfig.api}`);
-
     const bot = new Mwn({
       apiUrl: siteConfig.api,
       username: siteConfig.username,
@@ -108,9 +96,7 @@ export class WikiBotService extends Service {
         "SESSDATA=666; Domain=wiki.biligame.com; Path=/oni; HttpOnly; Secure;";
       bot.cookieJar.setCookie(cookieString, bot.options.apiUrl!, (err) => {
         if (err) {
-          logger.warn("Cookie 注入失败:", err);
-        } else {
-          logger.info("Cookie 注入成功");
+          logger.warn("bwiki Cookie 注入失败:", err);
         }
       });
       bot.setRequestOptions({
@@ -121,54 +107,35 @@ export class WikiBotService extends Service {
       });
     }
 
-    logger.info(`正在执行 ${siteConfig.name} 登录...`);
     await bot.login();
-
-    logger.info(`✅ 成功登录 ${siteConfig.name}`);
     return bot;
   }
 
   async start() {
-    logger.info("WikiBotService 正在初始化...");
     try {
       const sitesConfig = this.getSitesConfig();
 
-      logger.info("开始登录 WIKIGG...");
       try {
         this.ggbot = await this.loginWithRetry(sitesConfig.gg);
+        logger.info("✅ WIKIGG 登录成功");
       } catch (error) {
-        const errorMsg = getErrorMessage(error);
-        logger.error(
-          "WIKIGG 登录失败，服务将继续运行，但 WIKIGG 相关功能不可用",
-          errorMsg,
-        );
+        this.ggbot = null;
       }
 
-      logger.info("开始登录 bwiki...");
       try {
         this.bwikibot = await this.loginWithRetry(sitesConfig.bwiki);
+        logger.info("✅ bwiki 登录成功");
       } catch (error) {
-        const errorMsg = getErrorMessage(error);
-        logger.error(
-          "bwiki 登录失败，服务将继续运行，但 bwiki 相关功能不可用",
-          errorMsg,
-        );
+        this.bwikibot = null;
       }
 
-      if (this.ggbot && this.bwikibot) {
-        this.isReady = true;
-        logger.info("WikiBotService 初始化成功，两个 Wiki 已登录");
-      } else if (this.ggbot || this.bwikibot) {
-        this.isReady = true;
-        logger.warn(
-          `WikiBotService 部分初始化成功，已登录: ${this.ggbot ? "WIKIGG" : ""} ${this.bwikibot ? "bwiki" : ""}`,
-        );
-      } else {
-        logger.error("WikiBotService 初始化失败，所有登录都失败");
+      this.isReady = this.ggbot !== null || this.bwikibot !== null;
+      if (!this.isReady) {
+        logger.error("❌ WikiBotService 初始化失败，两个 Wiki 均无法登录");
       }
     } catch (error) {
       const errorMsg = getErrorMessage(error);
-      logger.error("WikiBotService 初始化出错:", errorMsg);
+      logger.error("❌ WikiBotService 初始化异常:", errorMsg);
     }
   }
 
@@ -176,7 +143,8 @@ export class WikiBotService extends Service {
     this.isReady = false;
     this.ggbot = null;
     this.bwikibot = null;
-    logger.info("WikiBotService 已停止");
+    this.ggbotProxy = null;
+    this.bwikibotProxy = null;
   }
 
   async relogin(): Promise<{ gg: boolean; bwiki: boolean }> {
@@ -184,45 +152,28 @@ export class WikiBotService extends Service {
     let ggSuccess = false;
     let bwikiSuccess = false;
 
-    logger.info("开始重新登录 WIKIGG...");
     try {
       this.ggbot = await this.loginWithRetry(sitesConfig.gg);
       ggSuccess = true;
-      logger.info("✅ 成功重新登录 WIKIGG");
+      logger.info("✅ WIKIGG 重新登录成功");
     } catch (error) {
       this.ggbot = null;
-      const errorMsg = getErrorMessage(error);
-      logger.error("❌ 重新登录 WIKIGG 失败", errorMsg);
     }
 
-    logger.info("开始重新登录 bwiki...");
     try {
       this.bwikibot = await this.loginWithRetry(sitesConfig.bwiki);
       bwikiSuccess = true;
-      logger.info("✅ 成功重新登录 bwiki");
+      logger.info("✅ bwiki 重新登录成功");
     } catch (error) {
       this.bwikibot = null;
-      const errorMsg = getErrorMessage(error);
-      logger.error("❌ 重新登录 bwiki 失败", errorMsg);
     }
 
-    if (this.ggbot && this.bwikibot) {
-      this.isReady = true;
-      logger.info("WikiBotService 重新登录成功，两个 Wiki 已登录");
-    } else if (this.ggbot || this.bwikibot) {
-      this.isReady = true;
-      logger.warn(
-        `WikiBotService 部分重新登录成功，已登录: ${this.ggbot ? "WIKIGG" : ""} ${this.bwikibot ? "bwiki" : ""}`,
-      );
-    } else {
-      this.isReady = false;
-      logger.error("WikiBotService 重新登录失败，所有登录都失败");
-    }
-
+    this.isReady = this.ggbot !== null || this.bwikibot !== null;
     return { gg: ggSuccess, bwiki: bwikiSuccess };
   }
 
   private async reloginSite(site: "gg" | "bwiki"): Promise<void> {
+    const siteName = site === "gg" ? "WIKIGG" : "bwiki";
     const sitesConfig = this.getSitesConfig();
     const siteConfig = site === "gg" ? sitesConfig.gg : sitesConfig.bwiki;
 
@@ -233,15 +184,13 @@ export class WikiBotService extends Service {
       } else {
         this.bwikibot = bot;
       }
-      logger.info(`✅ ${siteConfig.name} 自动重新登录成功`);
+      logger.info(`✅ ${siteName} 自动重新登录成功`);
     } catch (error) {
-      const errorMsg = getErrorMessage(error);
       if (site === "gg") {
         this.ggbot = null;
       } else {
         this.bwikibot = null;
       }
-      logger.error(`❌ ${siteConfig.name} 自动重新登录失败`, errorMsg);
       throw error;
     }
   }
@@ -254,76 +203,86 @@ export class WikiBotService extends Service {
     return this.bwikibot !== null;
   }
 
-  private createBotProxy(bot: Mwn, site: "gg" | "bwiki"): Mwn {
+  private createBotProxy(site: "gg" | "bwiki"): Mwn {
     const self = this;
-    
-    const METHODS_TO_SKIP = new Set([
-      "cookieJar",
-      "setRequestOptions",
-    ]);
 
-    return new Proxy(bot, {
-      get(target: any, prop) {
-        const originalMethod = target[prop];
-        if (typeof originalMethod !== "function") {
-          return originalMethod;
+    const METHODS_TO_SKIP = new Set(["cookieJar", "setRequestOptions"]);
+
+    const getCurrentBot = (): Mwn => {
+      const bot = site === "gg" ? self.ggbot : self.bwikibot;
+      if (!bot) {
+        throw new Error(
+          `${site === "gg" ? "WIKIGG" : "bwiki"} bot 尚未就绪，请检查登录配置或查看日志`,
+        );
+      }
+      return bot;
+    };
+
+    return new Proxy({} as Mwn, {
+      get(_target: any, prop) {
+        const propKey = prop as keyof Mwn;
+        const currentBot = getCurrentBot();
+        const value = currentBot[propKey];
+        if (typeof value !== "function") {
+          return value;
         }
 
         if (METHODS_TO_SKIP.has(prop as string)) {
-          return originalMethod.bind(target);
+          return value.bind(currentBot);
         }
 
         if (prop === "continuedQueryGen") {
           return function (...args: any[]) {
-            const originalGen = originalMethod.apply(target, args);
+            let activeBot = getCurrentBot();
+            let activeMethod = activeBot.continuedQueryGen;
+            let activeIterator = activeMethod
+              .apply(activeBot, args)
+              [Symbol.asyncIterator]();
+
             return {
               [Symbol.asyncIterator]() {
-                const it = originalGen[Symbol.asyncIterator]();
-                return {
-                  async next() {
-                    try {
-                      return await it.next();
-                    } catch (error: any) {
-                      if (error.code === "assertuserfailed") {
-                        logger.warn(
-                          `检测到 ${site === "gg" ? "WIKIGG" : "bwiki"} 登录过期，正在自动重新登录...`,
-                        );
-                        await self.reloginSite(site);
-                        const newBot = site === "gg" ? self.ggbot : self.bwikibot;
-                        if (!newBot) {
-                          throw new Error(
-                            `${site === "gg" ? "WIKIGG" : "bwiki"} 自动重新登录失败`,
-                          );
-                        }
-                        const newGen = newBot.continuedQueryGen(...args);
-                        const newIt = newGen[Symbol.asyncIterator]();
-                        return await newIt.next();
-                      }
-                      throw error;
-                    }
-                  },
-                };
+                return this;
+              },
+              async next() {
+                try {
+                  return await activeIterator.next();
+                } catch (error: any) {
+                  if (error.code === "assertuserfailed") {
+                    await self.reloginSite(site);
+                    activeBot = getCurrentBot();
+                    activeMethod = activeBot.continuedQueryGen;
+                    const newGen = activeMethod.apply(activeBot, args);
+                    activeIterator = newGen[Symbol.asyncIterator]();
+                    return await activeIterator.next();
+                  }
+                  throw error;
+                }
               },
             };
           };
         }
 
         return async function (...args: any[]) {
+          let executeBot = getCurrentBot();
+          let method = executeBot[propKey];
+          if (typeof method !== "function") {
+            throw new Error(
+              `${site === "gg" ? "WIKIGG" : "bwiki"} bot 缺少方法 ${String(prop)}`,
+            );
+          }
           try {
-            return await originalMethod.apply(target, args);
+            return await (method as any).apply(executeBot, args);
           } catch (error: any) {
             if (error.code === "assertuserfailed") {
-              logger.warn(
-                `检测到 ${site === "gg" ? "WIKIGG" : "bwiki"} 登录过期，正在自动重新登录...`,
-              );
               await self.reloginSite(site);
-              const newBot = site === "gg" ? self.ggbot : self.bwikibot;
-              if (!newBot) {
+              executeBot = getCurrentBot();
+              method = executeBot[propKey];
+              if (typeof method !== "function") {
                 throw new Error(
-                  `${site === "gg" ? "WIKIGG" : "bwiki"} 自动重新登录失败`,
+                  `${site === "gg" ? "WIKIGG" : "bwiki"} 新 bot 缺少方法 ${String(prop)}`,
                 );
               }
-              return await newBot[prop].apply(newBot, args);
+              return await (method as any).apply(executeBot, args);
             }
             throw error;
           }
@@ -332,18 +291,27 @@ export class WikiBotService extends Service {
     });
   }
 
+  private ggbotProxy: Mwn | null = null;
+  private bwikibotProxy: Mwn | null = null;
+
   getGGBot(): Mwn {
     if (!this.ggbot) {
       throw new Error("WIKIGG bot 尚未就绪，请检查登录配置或查看日志");
     }
-    return this.createBotProxy(this.ggbot, "gg");
+    if (!this.ggbotProxy) {
+      this.ggbotProxy = this.createBotProxy("gg");
+    }
+    return this.ggbotProxy;
   }
 
   getBWikiBot(): Mwn {
     if (!this.bwikibot) {
       throw new Error("bwiki bot 尚未就绪，请检查登录配置或查看日志");
     }
-    return this.createBotProxy(this.bwikibot, "bwiki");
+    if (!this.bwikibotProxy) {
+      this.bwikibotProxy = this.createBotProxy("bwiki");
+    }
+    return this.bwikibotProxy;
   }
 }
 

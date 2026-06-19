@@ -1,9 +1,33 @@
-import { Context, Logger, Schema } from "koishi";
+import { Context, Logger, Schema, Bot } from "koishi";
 import {} from "koishi-plugin-cron";
-import { incrementalUpdate, syncPages, syncSinglePage } from "../sync/pageSync";
+import {
+  incrementalUpdate,
+  syncPages,
+  syncSinglePage,
+  SyncNotifyItem,
+} from "../sync/pageSync";
 import { syncModules, syncSingleModule } from "../sync/moduleSync";
 import { syncAllImages, syncSingleImage } from "../sync/imgSync";
-import { logger } from "../utils/tools";
+import { logger, getErrorMessage } from "../utils/tools";
+
+/**
+ * 将 MediaWiki ISO 时间戳（如 "2024-06-19T10:30:45Z"）转为北京时间可读字符串
+ */
+function formatWikiTime(isoString: string): string {
+  try {
+    const date = new Date(isoString);
+    if (Number.isNaN(date.getTime())) return isoString;
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const y = date.getFullYear();
+    const m = pad(date.getMonth() + 1);
+    const d = pad(date.getDate());
+    const hh = pad(date.getHours());
+    const mm = pad(date.getMinutes());
+    return `${y}-${m}-${d} ${hh}:${mm}`;
+  } catch {
+    return isoString;
+  }
+}
 
 export interface SyncCommandsConfig {
   logsUrl: string;
@@ -14,15 +38,20 @@ export interface SyncCommandsConfig {
   domain: string;
   main_site: string;
   bwiki_site: string;
+  notifyGroupIds?: string[];
+  notifyBotPlatform?: string;
 }
 
 export class SyncCommands {
   public static readonly inject = ["wikiBot", "cron"];
   public config: SyncCommandsConfig;
+  private notifyFn?: (items: SyncNotifyItem[]) => void;
 
   constructor(ctx: Context, config: SyncCommandsConfig) {
     this.config = config;
     logger.info("WikiBot 服务已就绪，初始化定时任务和指令");
+
+    this.notifyFn = this.buildNotifyFn(ctx);
 
     ctx.cron("15 * * * *", async () => {
       if (!(await this.ensureBotsReady(ctx, "增量更新"))) return;
@@ -31,6 +60,7 @@ export class SyncCommands {
         ctx.wikiBot.getGGBot(),
         ctx.wikiBot.getBWikiBot(),
         config,
+        this.notifyFn,
       );
     });
 
@@ -63,6 +93,96 @@ export class SyncCommands {
     });
 
     this.registerCommands(ctx);
+  }
+
+  /**
+   * 规范化 channelId：兼容多种前缀格式
+   */
+  private normalizeChannelId(rawId: string): string {
+    const trimmed = rawId.trim();
+    if (!trimmed) return "";
+    const lower = trimmed.toLowerCase();
+    if (lower.startsWith("group:")) return trimmed.slice(6);
+    if (lower.startsWith("channel:")) return trimmed.slice(8);
+    if (lower.startsWith("qq:")) return trimmed.slice(3);
+    return trimmed;
+  }
+
+  /**
+   * 截断摘要到指定长度，超出部分用 ...
+   */
+  private truncateComment(text: string, max: number = 10): string {
+    if (!text) return "";
+    const clean = text.trim();
+    if (clean.length <= max) return clean;
+    return clean.slice(0, max) + "...";
+  }
+
+  /**
+   * 构建增量更新同步成功的通知回调
+   * 当配置了 notifyGroupIds 时，将同步成功的页面/图片合并成一条消息推送到指定 QQ 群
+   */
+  private buildNotifyFn(
+    ctx: Context,
+  ): ((items: SyncNotifyItem[]) => void) | undefined {
+    const groupIds = this.config.notifyGroupIds;
+    if (!groupIds || groupIds.length === 0) return undefined;
+
+    const platform = this.config.notifyBotPlatform || "qq";
+    const self = this;
+
+    return async (items: SyncNotifyItem[]) => {
+      try {
+        if (!items || items.length === 0) return;
+
+        const bots: Bot[] = [];
+        for (const bot of ctx.bots) {
+          if (bot.platform === platform && bot.isActive) {
+            bots.push(bot);
+          }
+        }
+        if (bots.length === 0) {
+          logger.warn(`[通知] 未找到可用的 ${platform} 平台 bot，跳过群通知`);
+          return;
+        }
+
+        const lines: string[] = [];
+        lines.push(`Wiki 同步更新（${items.length} 条）`);
+        lines.push("");
+        for (let i = 0; i < items.length; i++) {
+          const item = items[i];
+          const label = item.type === "image" ? "🖼️" : "📖";
+          const zhTime = item.timestamp ? formatWikiTime(item.timestamp) : "";
+          const user = item.user || "未知";
+          const shortComment = self.truncateComment(item.comment || "", 10);
+          const commentLine = shortComment ? `｜${shortComment}` : "";
+          lines.push(
+            `${label} ${i + 1}. ${item.title}｜${user}｜${zhTime}${commentLine}`,
+          );
+        }
+        const message = lines.join("\n");
+
+        for (const bot of bots) {
+          for (const rawChannelId of groupIds) {
+            const channelId = self.normalizeChannelId(rawChannelId);
+            if (!channelId) continue;
+            try {
+              await bot.sendMessage(channelId, message);
+              logger.info(
+                `[通知] 向 ${bot.platform}/${channelId} 推送成功 (${items.length} 条)`,
+              );
+            } catch (error) {
+              logger.error(
+                `[通知] 向 ${bot.platform}/${channelId} 发送消息失败:`,
+                getErrorMessage(error),
+              );
+            }
+          }
+        }
+      } catch (error) {
+        logger.error(`[通知] 处理通知过程出错:`, getErrorMessage(error));
+      }
+    };
   }
 
   /**
@@ -135,6 +255,7 @@ export class SyncCommands {
             ctx.wikiBot.getGGBot(),
             ctx.wikiBot.getBWikiBot(),
             this.config,
+            this.notifyFn,
           );
           return `✅ 已尝试获取三小时前的编辑并同步，请前往控制台查看：${this.config.logsUrl}`;
         } catch (err) {
@@ -254,6 +375,14 @@ export namespace SyncCommands {
     logsUrl: Schema.string()
       .description("日志查看地址")
       .default("https://klei.vip/onilogs"),
+    notifyGroupIds: Schema.array(Schema.string())
+      .description(
+        '增量更新同步成功时通知的群频道ID列表，如 ["group:123456"]，留空则不发送通知',
+      )
+      .default([]),
+    notifyBotPlatform: Schema.string()
+      .description("通知 bot 的平台标识，默认 qq")
+      .default("qq"),
   });
 }
 

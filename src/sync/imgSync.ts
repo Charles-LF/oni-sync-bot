@@ -28,6 +28,23 @@ interface QueryPage {
 }
 
 /**
+ * 确保图片标题以 File: 前缀开头
+ * MediaWiki 的 titles 参数需要完整页面标题，否则会去主命名空间查找
+ */
+function normalizeImageTitle(fileName: string): string {
+  const trimmed = fileName.trim();
+  const lower = trimmed.toLowerCase();
+  if (
+    lower.startsWith("file:") ||
+    lower.startsWith("image:") ||
+    lower.startsWith("文件:")
+  ) {
+    return trimmed;
+  }
+  return `File:${trimmed}`;
+}
+
+/**
  * 获取图片的原始URL和SHA1
  */
 async function getImageInfo(
@@ -35,9 +52,10 @@ async function getImageInfo(
   fileName: string,
 ): Promise<ImageInfo | null> {
   try {
+    const normalizedTitle = normalizeImageTitle(fileName);
     const response = await site.query({
       action: "query",
-      titles: fileName,
+      titles: normalizedTitle,
       prop: "imageinfo",
       iiprop: "url|sha1|size|mime",
     });
@@ -72,10 +90,11 @@ async function getImageInfo(
  */
 async function deleteOldVersions(bot: Mwn, fileName: string): Promise<void> {
   try {
+    const normalizedTitle = normalizeImageTitle(fileName);
     // 获取文件的所有修订版本
     const response = await bot.query({
       action: "query",
-      titles: fileName,
+      titles: normalizedTitle,
       prop: "revisions",
       rvprop: "ids|timestamp",
       rvlimit: "max",
@@ -127,6 +146,21 @@ async function deleteOldVersions(bot: Mwn, fileName: string): Promise<void> {
 }
 
 /**
+ * 去除 File:/Image:/文件: 前缀，返回纯文件名
+ */
+function stripImagePrefix(fileName: string): string {
+  const trimmed = fileName.trim();
+  const lower = trimmed.toLowerCase();
+  const prefixes = ["file:", "image:", "文件:"];
+  for (const p of prefixes) {
+    if (lower.startsWith(p)) {
+      return trimmed.substring(p.length);
+    }
+  }
+  return trimmed;
+}
+
+/**
  * 同步单个图片
  */
 async function syncSingleImage(
@@ -140,18 +174,20 @@ async function syncSingleImage(
     return { success: true, reason: "ignored" };
   }
 
+  const bareFileName = stripImagePrefix(fileName);
+
   try {
-    logger.info(`[SyncImg] 🚀 开始处理: ${fileName}`);
+    logger.info(`[SyncImg] 🚀 开始处理: ${bareFileName}`);
 
     // 获取源站图片信息
-    const sourceImageInfo = await getImageInfo(sourceBot, fileName);
+    const sourceImageInfo = await getImageInfo(sourceBot, bareFileName);
     if (!sourceImageInfo) {
       logger.info(`[SyncImg] ❌ 源站未找到图片: ${fileName}`);
       return { success: false, reason: "source_missing" };
     }
 
     // 哈希校验
-    const targetImageInfo = await getImageInfo(targetBot, fileName);
+    const targetImageInfo = await getImageInfo(targetBot, bareFileName);
     logger.info(`原图片sha1: ${sourceImageInfo.sha1}`);
     logger.info(`目标图片sha1: ${targetImageInfo?.sha1}`);
     if (targetImageInfo && targetImageInfo.sha1 === sourceImageInfo.sha1) {
@@ -173,14 +209,14 @@ async function syncSingleImage(
 
     const imageBuffer = Buffer.from(await imageResponse.arrayBuffer());
     logger.info(
-      `[SyncImg] 📤 上传图片: ${fileName} (大小: ${(imageBuffer.length / 1024).toFixed(1)} KB)`,
+      `[SyncImg] 📤 上传图片: ${bareFileName} (大小: ${(imageBuffer.length / 1024).toFixed(1)} KB)`,
     );
 
     const token = await targetBot.getCsrfToken();
     const form = new FormData();
 
     form.append("action", "upload");
-    form.append("filename", fileName);
+    form.append("filename", bareFileName);
     form.append("text", CONFIG.UPLOAD_TEXT);
     form.append("comment", CONFIG.UPLOAD_COMMENT);
     form.append("token", token);
@@ -188,7 +224,7 @@ async function syncSingleImage(
     form.append("format", "json");
 
     form.append("file", imageBuffer, {
-      filename: fileName.split(":").pop() || fileName,
+      filename: bareFileName,
       contentType:
         imageResponse.headers.get("content-type") || "application/octet-stream",
     });

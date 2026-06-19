@@ -232,15 +232,28 @@ async function syncPages(oldSite: Mwn, newSite: Mwn): Promise<void> {
 }
 
 /**
+ * 同步成功事件信息
+ */
+export interface SyncNotifyItem {
+  title: string;
+  type: "page" | "image";
+  user?: string;
+  timestamp?: string;
+  comment?: string;
+}
+
+/**
  * 增量更新
  * @param oldSite 源站点机器人实例
  * @param newSite 目标站点机器人实例
  * @param config KOISHI用户配置的项
+ * @param onSynced 同步成功批量回调（仅 reason==="synced" 的条目，函数结束时一次调用）
  */
 async function incrementalUpdate(
   oldSite: Mwn,
   newSite: Mwn,
   config: Config,
+  onSynced?: (items: SyncNotifyItem[]) => void,
 ): Promise<void> {
   try {
     const now = new Date();
@@ -261,6 +274,7 @@ async function incrementalUpdate(
     const processedTitles = new Set<string>();
     let totalProcessed = 0;
     let totalSkipped = 0;
+    const syncedItems: SyncNotifyItem[] = [];
 
     for await (const res of queryGen) {
       const pages = res.query?.recentchanges || [];
@@ -289,21 +303,48 @@ async function incrementalUpdate(
         totalProcessed++;
 
         try {
+          const rcUser = page.user || "未知";
+          const rcTimestamp = page.timestamp || "";
+          const rcComment = page.comment || "";
+
           // 检查是否为图片页面
           if (title.startsWith(CONFIG.FILE_NAMESPACE_PREFIX)) {
             const fileName = title.replace(CONFIG.FILE_NAMESPACE_PREFIX, "");
             logger.info(
               `[增量更新流程] 🖼️  检查到图片: ${title}，正在尝试转存`,
             );
-            await syncSingleImage(oldSite, newSite, fileName, config);
+            const result = await syncSingleImage(
+              oldSite,
+              newSite,
+              fileName,
+              config,
+            );
+            if (result.success && result.reason === "synced") {
+              syncedItems.push({
+                title,
+                type: "image",
+                user: rcUser,
+                timestamp: rcTimestamp,
+                comment: rcComment,
+              });
+            }
           } else {
             // 普通页面更新
-            await syncSinglePage(
+            const result = await syncSinglePage(
               oldSite,
               newSite,
               title,
-              CONFIG.INCREMENTAL_USER,
+              rcUser,
             );
+            if (result.success && result.reason === "synced") {
+              syncedItems.push({
+                title,
+                type: "page",
+                user: rcUser,
+                timestamp: rcTimestamp,
+                comment: rcComment,
+              });
+            }
           }
 
           await sleep(CONFIG.SYNC_INTERVAL_SUCCESS);
@@ -316,8 +357,11 @@ async function incrementalUpdate(
     }
 
     logger.info(
-      `[增量更新流程] ✅ 增量更新完成！处理: ${totalProcessed}, 跳过: ${totalSkipped}`,
+      `[增量更新流程] ✅ 增量更新完成！处理: ${totalProcessed}, 跳过: ${totalSkipped}, 通知: ${syncedItems.length}`,
     );
+    if (syncedItems.length > 0) {
+      onSynced?.(syncedItems);
+    }
   } catch (globalError) {
     logger.error(`[增量更新流程] 💥 增量更新流程异常终止:`, globalError);
     throw globalError;
