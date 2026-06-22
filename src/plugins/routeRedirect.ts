@@ -41,12 +41,25 @@ export class RouteRedirect {
       router.redirect(targetUrl);
     });
 
-    // ctx.server.get("/ggwiki/", async (router) => {
-    //   const suffix = router.params[""] || "";
-    //   const queryString = router.querystring ? `?${router.querystring}` : "";
-    //   const targetUrl = `https://${this.config.main_site}/${suffix}${queryString}`;
-    //   router.redirect(targetUrl);
-    // });
+    ctx.server.use("/ggwiki", async (router, next) => {
+      const fullPath = router.path.replace("/ggwiki", "") || "";
+
+      // 安全校验：禁止路径遍历（先解码 URL 编码的路径，防止绕过检测）
+      const decodedPath = decodeURIComponent(fullPath);
+      if (decodedPath.includes("..")) {
+        return (router.body = "❌ 非法路径访问！");
+      }
+
+      // 安全校验：路径只能包含合法字符（允许空路径、斜杠、中文、字母、数字、下划线、连字符、冒号、点、百分号）
+      if (!/^(\/[\p{L}\p{N}_\-:.%]+)*\/?$/u.test(fullPath)) {
+        return (router.body = "❌ 路径包含非法字符！");
+      }
+
+      const queryString = router.querystring ? `?${router.querystring}` : "";
+      const targetUrl = `https://${this.config.main_site}${fullPath}${queryString}`;
+      router.redirect(targetUrl);
+      return;
+    });
   }
 }
 
