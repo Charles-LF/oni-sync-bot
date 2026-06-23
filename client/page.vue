@@ -9,17 +9,17 @@
       <div class="filter-row">
         <el-input v-model="filterText" placeholder="搜索日志内容..." clearable class="filter-input" />
         <div class="button-group">
-          <el-button size="small" @click="scrollToTop">
-            <el-icon>
-              <Top />
-            </el-icon>
-            顶部
-          </el-button>
           <el-button size="small" @click="scrollToBottom">
             <el-icon>
               <Bottom />
             </el-icon>
             底部
+          </el-button>
+          <el-button size="small" @click="scrollToTop">
+            <el-icon>
+              <Top />
+            </el-icon>
+            顶部
           </el-button>
         </div>
       </div>
@@ -77,13 +77,14 @@ const currentLogs = computed(() => {
 })
 
 const filteredLogs = computed(() => {
+  let logs = currentLogs.value
   if (!filterText.value.trim()) {
-    return currentLogs.value
+    return [...logs].reverse()
   }
   const search = filterText.value.toLowerCase()
-  return currentLogs.value.filter(log =>
+  return logs.filter(log =>
     log.toLowerCase().includes(search)
-  )
+  ).reverse()
 })
 
 function getLogClass(text: string): string {
@@ -114,26 +115,50 @@ watch(
   { deep: true, immediate: true }
 )
 
-watch(() => displayLogs.value.length, () => {
-  setTimeout(scrollToBottom, 0)
-})
-
 onMounted(() => {
-  scrollToBottom()
+  scrollToTop()
 })
 </script>
 
 <style lang="scss" scoped>
 .filter-container {
-  background: #fff;
+  background: #ffffff;
   padding: 16px;
   margin-bottom: 12px;
-  border-radius: 4px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  border: 1px solid #e8e8e8;
 }
 
 .log-tabs {
   margin-bottom: 16px;
+
+  :deep(.el-tabs__header) {
+    border-bottom: 2px solid #e8e8e8;
+  }
+
+  :deep(.el-tabs__item) {
+    color: #333333 !important;
+    font-weight: 500;
+    font-size: 14px;
+    padding: 0 20px;
+    margin-right: 10px;
+    opacity: 1 !important;
+
+    &:hover {
+      color: #1890ff !important;
+    }
+  }
+
+  :deep(.el-tabs__item.is-active) {
+    color: #1890ff !important;
+    font-weight: 600;
+  }
+
+  :deep(.el-tabs__active-bar) {
+    background-color: #1890ff;
+    height: 3px;
+  }
 }
 
 .filter-row {
@@ -144,6 +169,26 @@ onMounted(() => {
 
 .filter-input {
   flex: 1;
+
+  :deep(.el-input__wrapper) {
+    border: 1px solid #d9d9d9;
+    border-radius: 6px;
+    background-color: #ffffff;
+    transition: all 0.3s;
+
+    &:hover {
+      border-color: #1890ff;
+    }
+
+    &.is-focus {
+      border-color: #1890ff;
+      box-shadow: 0 0 0 2px rgba(24, 144, 255, 0.1);
+    }
+  }
+
+  :deep(.el-input__placeholder) {
+    color: #8c8c8c;
+  }
 }
 
 .button-group {
@@ -151,20 +196,43 @@ onMounted(() => {
   gap: 8px;
 }
 
+:deep(.el-button) {
+  background-color: #ffffff;
+  border: 1px solid #d9d9d9;
+  color: #333333;
+  border-radius: 6px;
+  padding: 6px 16px;
+  font-size: 13px;
+  transition: all 0.3s;
+
+  &:hover {
+    background-color: #f5f5f5;
+    border-color: #1890ff;
+    color: #1890ff;
+  }
+
+  &:active {
+    background-color: #e8f4ff;
+  }
+}
+
 .log-container {
   width: 100%;
-  height: calc(100vh - 220px);
+  height: calc(100vh - 260px);
   overflow-y: auto;
-  padding: 12px;
-  font-family: monospace;
-  background: #1e1e1e;
-  color: #d4d4d4;
-  border-radius: 4px;
+  padding: 16px;
+  padding-bottom: 60px;
+  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+  background-color: #1a1a2e;
+  color: #e4e4e4;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
 }
 
 .log-line {
-  line-height: 1.5;
+  line-height: 1.6;
   font-size: 13px;
+  padding: 2px 0;
 }
 
 pre {
@@ -175,15 +243,18 @@ pre {
 }
 
 .log-error {
-  color: #f44747;
+  color: #ff6b6b;
+  text-shadow: 0 0 2px rgba(255, 107, 107, 0.3);
 }
 
 .log-warn {
-  color: #dcdcaa;
+  color: #ffd93d;
+  text-shadow: 0 0 2px rgba(255, 217, 61, 0.3);
 }
 
 .log-info {
-  color: #4fc1ff;
+  color: #6bcfff;
+  text-shadow: 0 0 2px rgba(107, 207, 255, 0.3);
 }
 
 .empty-state {
@@ -191,7 +262,26 @@ pre {
   justify-content: center;
   align-items: center;
   height: 100%;
-  color: #808080;
+  color: #888888;
   font-size: 14px;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #2a2a4a;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #4a4a6a;
+  border-radius: 4px;
+
+  &:hover {
+    background: #5a5a8a;
+  }
 }
 </style>

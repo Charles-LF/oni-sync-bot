@@ -11,6 +11,8 @@ import { SyncCommands, SyncCommandsConfig } from "./plugins/syncCommands";
 import { QueryCommands, QueryCommandsConfig } from "./plugins/queryCommands";
 import { UpdateCommands, UpdateCommandsConfig } from "./plugins/updateCommands";
 import { TodoList } from "./plugins/todoList";
+// @ts-ignore
+import { SyncContributor } from "./plugins/syncContributor";
 
 export const name = "oni-sync-bot";
 
@@ -39,6 +41,7 @@ export function apply(ctx: Context, config: Config) {
   ctx.plugin(QueryCommands, config);
   ctx.plugin(UpdateCommands, config);
   ctx.plugin(TodoList);
+  ctx.plugin(SyncContributor, config);
 
   ctx.inject(["console"], (ctx) => {
     ctx.console.addEntry({

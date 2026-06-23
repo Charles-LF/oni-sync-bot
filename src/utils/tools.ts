@@ -141,9 +141,28 @@ function getErrorMessage(error: unknown): string {
   return String(error);
 }
 
+/**
+ * 将 MediaWiki ISO 时间戳（如 "2024-06-19T10:30:45Z"）转为北京时间可读字符串
+ */
+function formatWikiTime(isoString: string): string {
+  try {
+    const date = new Date(isoString);
+    if (Number.isNaN(date.getTime())) return isoString;
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const y = date.getFullYear();
+    const m = pad(date.getMonth() + 1);
+    const d = pad(date.getDate());
+    const hh = pad((date.getUTCHours() + 8) % 24);
+    const mm = pad(date.getUTCMinutes());
+    return `${y}-${m}-${d} ${hh}:${mm}`;
+  } catch {
+    return isoString;
+  }
+}
 export {
   getAndProcessPageContent,
   generatePinyinInfo,
   logger,
   getErrorMessage,
+  formatWikiTime,
 };

@@ -210,7 +210,20 @@ export class QueryCommands {
       if (prefix) {
         md += `**${prefix}**\n`;
       }
-      md += `**📖 ${match.title}**\n`;
+      md += `**📖 ${match.title}**\n\n`;
+
+      // 添加贡献者和修改时间信息
+      if (match.contributor || match.change_time) {
+        md += "---\n";
+        if (match.contributor) {
+          md += `> **👤 最后贡献者：** ${match.contributor}\n`;
+        }
+        if (match.change_time) {
+          md += `> **🕐 最后修改：** ${match.change_time}\n`;
+        }
+        md += "惟知是信  至诚若天\n---\n";
+      }
+
       const keyboard = this.buildResultKeyboard(match);
       return this.sendResponse(session, md, keyboard);
     }
@@ -218,7 +231,22 @@ export class QueryCommands {
     if (prefix) {
       message += prefix + "\n";
     }
-    message += `GG原站点: https://${this.config.domain}/gg/${match.id}\n\nbwiki: https://${this.config.domain}/bw/${match.id}`;
+    message += `📖 ${match.title}\n`;
+
+    // 添加贡献者和修改时间信息
+    if (match.contributor || match.change_time) {
+      message += "--------\n";
+      if (match.contributor) {
+        message += `👤 最后贡献者：${match.contributor}\n`;
+      }
+      if (match.change_time) {
+        message += `🕐 最后修改：${match.change_time}\n`;
+      }
+    }
+    message += "惟知是信  至诚若天\n";
+    message += "--------\n";
+    message += `🔗 GG原站点: \`https://${this.config.domain}/gg/${match.id}\`\n`;
+    message += `📚 bwiki: \`https://${this.config.domain}/bw/${match.id}\``;
     return message;
   }
 

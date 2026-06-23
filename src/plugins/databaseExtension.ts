@@ -11,6 +11,8 @@ export interface WikiPages {
   title: string;
   pinyin_full: string;
   pinyin_first: string;
+  contributor?: string;
+  change_time?: string;
 }
 
 export class DatabaseExtension {
@@ -22,6 +24,8 @@ export class DatabaseExtension {
       title: "string",
       pinyin_full: "string",
       pinyin_first: "string",
+      contributor: "string",
+      change_time: "string",
     });
   }
 }

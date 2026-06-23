@@ -1,6 +1,11 @@
 import { Mwn } from "mwn";
 import { Config } from "../index";
-import { getAndProcessPageContent, logger } from "../utils/tools";
+import {
+  getAndProcessPageContent,
+  logger,
+  formatWikiTime,
+  generatePinyinInfo,
+} from "../utils/tools";
 import { sleep } from "koishi";
 import { syncSingleImage } from "./imgSync";
 
@@ -13,7 +18,114 @@ const CONFIG = {
   FILE_NAMESPACE_PREFIX: "File:",
   DEFAULT_USER: "同步坤器人",
   INCREMENTAL_USER: "定时同步",
+  DB_RETRY_MAX: 3,
+  DB_RETRY_DELAY: 500,
 };
+
+export interface Database {
+  set(table: string, query: object, data: object): Promise<any>;
+  get<T = any>(table: string, query: object): Promise<T[]>;
+  create(table: string, data: object): Promise<any>;
+  upsert(table: string, data: object | object[]): Promise<any>;
+}
+
+interface RecentChange {
+  title: string;
+  user?: string;
+  timestamp?: string;
+  comment?: string;
+  rcid: number;
+  pageid?: number;
+}
+
+/**
+ * 带重试的数据库操作
+ */
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  maxRetries: number = CONFIG.DB_RETRY_MAX,
+  delay: number = CONFIG.DB_RETRY_DELAY,
+): Promise<T> {
+  let lastError: Error | undefined;
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+      if (attempt < maxRetries) {
+        logger.debug(
+          `数据库操作失败，正在重试 (${attempt}/${maxRetries}): ${lastError.message}`,
+        );
+        await sleep(delay);
+      }
+    }
+  }
+
+  throw lastError || new Error("数据库操作失败");
+}
+
+/**
+ * 检查并初始化页面到数据库
+ * 如果数据库中不存在该页面，先创建基本数据
+ */
+export async function ensurePageInDatabase(
+  database: Database | undefined,
+  pageId: number,
+  title: string,
+): Promise<void> {
+  if (!database) return;
+
+  try {
+    await withRetry(async () => {
+      const existing = await database.get("wikipages", { title });
+      if (existing.length === 0) {
+        const { pinyin_full, pinyin_first } = generatePinyinInfo(title);
+        await database.create("wikipages", {
+          id: pageId,
+          title,
+          pinyin_full,
+          pinyin_first,
+        });
+        logger.info(`[数据库初始化] ✅ 页面 ${title} 已添加到数据库`);
+      }
+    });
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    logger.warn(`[数据库初始化] ❌ 初始化页面 ${title} 失败: ${errMsg}`);
+  }
+}
+
+/**
+ * 更新页面贡献者信息到数据库
+ */
+export async function updateContributorToDatabase(
+  database: Database | undefined,
+  title: string,
+  user: string,
+  timestamp: string,
+): Promise<void> {
+  if (!database) return;
+
+  try {
+    await withRetry(async () => {
+      await database.set(
+        "wikipages",
+        { title },
+        {
+          contributor: user,
+          change_time: formatWikiTime(timestamp),
+        },
+      );
+      logger.debug(`[数据库更新] ✅ 页面 ${title} 的贡献者信息已更新: ${user}`);
+    });
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    logger.warn(
+      `[数据库更新] ❌ 更新页面 ${title} 的贡献者信息失败: ${errMsg}`,
+    );
+  }
+}
 /**
  * 单页面同步
  * @param oldSite 源站点机器人实例
@@ -248,13 +360,22 @@ export interface SyncNotifyItem {
  * @param newSite 目标站点机器人实例
  * @param config KOISHI用户配置的项
  * @param onSynced 同步成功批量回调（仅 reason==="synced" 的条目，函数结束时一次调用）
+ * @param database 数据库实例（可选），用于更新贡献者信息
  */
-async function incrementalUpdate(
+export async function incrementalUpdate(
   oldSite: Mwn,
   newSite: Mwn,
   config: Config,
   onSynced?: (items: SyncNotifyItem[]) => void,
+  database?: Database,
 ): Promise<void> {
+  const startTime = Date.now();
+  const processedTitles = new Set<string>();
+  const syncedItems: SyncNotifyItem[] = [];
+  let totalProcessed = 0;
+  let totalSkipped = 0;
+  let totalSynced = 0;
+
   try {
     const now = new Date();
     const threeHoursAgo = new Date(now.getTime() - 3 * 60 * 60 * 1000);
@@ -268,23 +389,24 @@ async function incrementalUpdate(
       rcstart: now.toISOString(),
       rcend: threeHoursAgo.toISOString(),
       rcdir: "older",
-      rcprop: "user|comment|title|timestamp",
+      rcprop: "user|comment|title|timestamp|ids",
     });
 
-    const processedTitles = new Set<string>();
-    let totalProcessed = 0;
-    let totalSkipped = 0;
-    const syncedItems: SyncNotifyItem[] = [];
-
     for await (const res of queryGen) {
-      const pages = res.query?.recentchanges || [];
+      const pages: RecentChange[] = res.query?.recentchanges || [];
 
       for (const page of pages) {
-        const title = page.title;
+        const {
+          title,
+          user: rcUser,
+          timestamp: rcTimestamp,
+          comment: rcComment,
+          pageid,
+        } = page;
 
         // 检查是否已处理过
         if (processedTitles.has(title)) {
-          logger.info(`[增量更新流程] ⏭️  已经处理过 ${title}, 跳过`);
+          logger.debug(`[增量更新流程] ⏭️ 已处理过 ${title}, 跳过`);
           totalSkipped++;
           continue;
         }
@@ -303,48 +425,36 @@ async function incrementalUpdate(
         totalProcessed++;
 
         try {
-          const rcUser = page.user || "未知";
-          const rcTimestamp = page.timestamp || "";
-          const rcComment = page.comment || "";
+          const user = rcUser || "未知";
+          const timestamp = rcTimestamp || "";
+          const comment = rcComment || "";
 
           // 检查是否为图片页面
           if (title.startsWith(CONFIG.FILE_NAMESPACE_PREFIX)) {
-            const fileName = title.replace(CONFIG.FILE_NAMESPACE_PREFIX, "");
-            logger.info(
-              `[增量更新流程] 🖼️  检查到图片: ${title}，正在尝试转存`,
-            );
-            const result = await syncSingleImage(
-              oldSite,
-              newSite,
-              fileName,
-              config,
-            );
-            if (result.success && result.reason === "synced") {
-              syncedItems.push({
-                title,
-                type: "image",
-                user: rcUser,
-                timestamp: rcTimestamp,
-                comment: rcComment,
-              });
-            }
-          } else {
-            // 普通页面更新
-            const result = await syncSinglePage(
+            await handleImageSync(
               oldSite,
               newSite,
               title,
-              rcUser,
+              user,
+              timestamp,
+              comment,
+              config,
+              syncedItems,
             );
-            if (result.success && result.reason === "synced") {
-              syncedItems.push({
-                title,
-                type: "page",
-                user: rcUser,
-                timestamp: rcTimestamp,
-                comment: rcComment,
-              });
-            }
+          } else {
+            // 普通页面更新
+            await handlePageSync(
+              oldSite,
+              newSite,
+              title,
+              pageid || 0,
+              user,
+              timestamp,
+              comment,
+              database,
+              syncedItems,
+            );
+            totalSynced++;
           }
 
           await sleep(CONFIG.SYNC_INTERVAL_SUCCESS);
@@ -355,17 +465,77 @@ async function incrementalUpdate(
         }
       }
     }
-
+  } catch (globalError) {
+    logger.error(`[增量更新流程] 💥 增量更新流程异常终止:`, globalError);
+    throw globalError;
+  } finally {
+    const duration = (Date.now() - startTime) / 1000;
     logger.info(
-      `[增量更新流程] ✅ 增量更新完成！处理: ${totalProcessed}, 跳过: ${totalSkipped}, 通知: ${syncedItems.length}`,
+      `[增量更新流程] ✅ 增量更新完成！处理: ${totalProcessed}, 跳过: ${totalSkipped}, 同步: ${totalSynced}, 通知: ${syncedItems.length}, 耗时: ${duration.toFixed(2)}s`,
     );
     if (syncedItems.length > 0) {
       onSynced?.(syncedItems);
     }
-  } catch (globalError) {
-    logger.error(`[增量更新流程] 💥 增量更新流程异常终止:`, globalError);
-    throw globalError;
   }
 }
 
-export { syncSinglePage, syncPages, incrementalUpdate };
+/**
+ * 处理图片同步
+ */
+async function handleImageSync(
+  oldSite: Mwn,
+  newSite: Mwn,
+  title: string,
+  user: string,
+  timestamp: string,
+  comment: string,
+  config: Config,
+  syncedItems: SyncNotifyItem[],
+): Promise<void> {
+  const fileName = title.replace(CONFIG.FILE_NAMESPACE_PREFIX, "");
+  logger.info(`[增量更新流程] 🖼️ 检查到图片: ${title}，正在尝试转存`);
+  const result = await syncSingleImage(oldSite, newSite, fileName, config);
+  if (result.success && result.reason === "synced") {
+    syncedItems.push({
+      title,
+      type: "image",
+      user,
+      timestamp,
+      comment,
+    });
+  }
+}
+
+/**
+ * 处理页面同步
+ */
+async function handlePageSync(
+  oldSite: Mwn,
+  newSite: Mwn,
+  title: string,
+  pageId: number,
+  user: string,
+  timestamp: string,
+  comment: string,
+  database: Database | undefined,
+  syncedItems: SyncNotifyItem[],
+): Promise<void> {
+  // 先检查数据库中是否存在该页面，不存在则先创建
+  await ensurePageInDatabase(database, pageId, title);
+
+  const result = await syncSinglePage(oldSite, newSite, title, user);
+  if (result.success && result.reason === "synced") {
+    syncedItems.push({
+      title,
+      type: "page",
+      user,
+      timestamp,
+      comment,
+    });
+
+    // 更新数据库中的贡献者信息
+    await updateContributorToDatabase(database, title, user, timestamp);
+  }
+}
+
+export { syncSinglePage, syncPages };

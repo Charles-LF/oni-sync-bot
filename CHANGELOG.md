@@ -11,12 +11,28 @@
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Removed
+
+---
+
+## [0.9.1] — 2026-06-24
+
+### Added
+
 - `src/plugins/routeRedirect.ts` 新增 `/ggwiki` 路由重定向，支持路径和查询参数透传
 
 ### Fixed
 
 - `src/plugins/routeRedirect.ts` — 正则表达式不匹配空路径、单独斜杠和中文路径的问题，修改为使用 Unicode 属性转义 `\p{L}\p{N}` 支持多语言字符
 - `src/plugins/routeRedirect.ts` — 路径遍历防护不完善，攻击者可通过 URL 编码（如 `%2e%2e`）绕过检测，修复为使用 `decodeURIComponent` 解码后再检查
+- `src/plugins/syncContributor.ts` — `apply` 函数缺少配置参数传递，构造函数未接收配置参数
+- `src/plugins/syncContributor.ts` — 使用 `console.error` 而非统一的 `this.logger.error`
+- `src/utils/tools.ts` — `formatWikiTime()` 未处理时区，UTC 时间直接转换为本地时间，修复为转换为北京时间（UTC+8）
+- `src/sync/pageSync.ts` — 图片图标显示为乱码 `�️`，修正为 `🖼️`
 
 ---
 
@@ -66,6 +82,7 @@
 - 页面拼音查询与模糊搜索命令
 - 定时任务（基于 `koishi-plugin-cron`）
 
-[Unreleased]: https://github.com/Charles-lf/oni-sync-bot/compare/v0.8.9...HEAD
+[Unreleased]: https://github.com/Charles-lf/oni-sync-bot/compare/v0.9.1...HEAD
+[0.9.1]: https://github.com/Charles-lf/oni-sync-bot/releases/tag/v0.9.1
 [0.8.9]: https://github.com/Charles-lf/oni-sync-bot/releases/tag/v0.8.9
 [0.8.8]: https://github.com/Charles-lf/oni-sync-bot/releases/tag/v0.8.8

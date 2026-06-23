@@ -8,26 +8,7 @@ import {
 } from "../sync/pageSync";
 import { syncModules, syncSingleModule } from "../sync/moduleSync";
 import { syncAllImages, syncSingleImage } from "../sync/imgSync";
-import { logger, getErrorMessage } from "../utils/tools";
-
-/**
- * 将 MediaWiki ISO 时间戳（如 "2024-06-19T10:30:45Z"）转为北京时间可读字符串
- */
-function formatWikiTime(isoString: string): string {
-  try {
-    const date = new Date(isoString);
-    if (Number.isNaN(date.getTime())) return isoString;
-    const pad = (n: number) => String(n).padStart(2, "0");
-    const y = date.getFullYear();
-    const m = pad(date.getMonth() + 1);
-    const d = pad(date.getDate());
-    const hh = pad(date.getHours());
-    const mm = pad(date.getMinutes());
-    return `${y}-${m}-${d} ${hh}:${mm}`;
-  } catch {
-    return isoString;
-  }
-}
+import { logger, getErrorMessage, formatWikiTime } from "../utils/tools";
 
 export interface SyncCommandsConfig {
   logsUrl: string;
@@ -43,7 +24,7 @@ export interface SyncCommandsConfig {
 }
 
 export class SyncCommands {
-  public static readonly inject = ["wikiBot", "cron"];
+  public static readonly inject = ["wikiBot", "database", "cron"];
   public config: SyncCommandsConfig;
   private notifyFn?: (items: SyncNotifyItem[]) => void;
 
@@ -61,6 +42,7 @@ export class SyncCommands {
         ctx.wikiBot.getBWikiBot(),
         config,
         this.notifyFn,
+        ctx.database,
       );
     });
 
