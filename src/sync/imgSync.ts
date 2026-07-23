@@ -3,7 +3,12 @@ import { sleep } from "koishi";
 import fetch from "node-fetch";
 import FormData from "form-data";
 import { Config } from "../index";
-import { logger, getErrorMessage } from "../utils/tools";
+import {
+  logger,
+  getErrorMessage,
+  normalizeImageTitle,
+  stripImagePrefix,
+} from "../utils/tools";
 
 // 配置项
 export const CONFIG = {
@@ -25,23 +30,6 @@ interface QueryPage {
   title: string;
   missing?: boolean;
   imageinfo?: ImageInfo[];
-}
-
-/**
- * 确保图片标题以 File: 前缀开头
- * MediaWiki 的 titles 参数需要完整页面标题，否则会去主命名空间查找
- */
-function normalizeImageTitle(fileName: string): string {
-  const trimmed = fileName.trim();
-  const lower = trimmed.toLowerCase();
-  if (
-    lower.startsWith("file:") ||
-    lower.startsWith("image:") ||
-    lower.startsWith("文件:")
-  ) {
-    return trimmed;
-  }
-  return `File:${trimmed}`;
 }
 
 /**
@@ -143,21 +131,6 @@ async function deleteOldVersions(bot: Mwn, fileName: string): Promise<void> {
     const errorMsg = getErrorMessage(error);
     logger.error(`[SyncImg] ❌ 获取版本信息失败:`, errorMsg);
   }
-}
-
-/**
- * 去除 File:/Image:/文件: 前缀，返回纯文件名
- */
-function stripImagePrefix(fileName: string): string {
-  const trimmed = fileName.trim();
-  const lower = trimmed.toLowerCase();
-  const prefixes = ["file:", "image:", "文件:"];
-  for (const p of prefixes) {
-    if (lower.startsWith(p)) {
-      return trimmed.substring(p.length);
-    }
-  }
-  return trimmed;
 }
 
 /**

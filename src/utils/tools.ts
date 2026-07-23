@@ -159,10 +159,79 @@ function formatWikiTime(isoString: string): string {
     return isoString;
   }
 }
+
+/**
+ * 规范化 channelId：兼容多种前缀格式
+ * @param rawId 原始 channelId
+ * @returns 规范化后的 channelId
+ */
+function normalizeChannelId(rawId: string): string {
+  const trimmed = rawId.trim();
+  if (!trimmed) return "";
+  const lower = trimmed.toLowerCase();
+  if (lower.startsWith("group:")) return trimmed.slice(6);
+  if (lower.startsWith("channel:")) return trimmed.slice(8);
+  if (lower.startsWith("qq:")) return trimmed.slice(3);
+  return trimmed;
+}
+
+/**
+ * 截断摘要到指定长度，超出部分用 ...
+ * @param text 原始文本
+ * @param max 最大长度，默认为10
+ * @returns 截断后的文本
+ */
+function truncateComment(text: string, max: number = 10): string {
+  if (!text) return "";
+  const clean = text.trim();
+  if (clean.length <= max) return clean;
+  return clean.slice(0, max) + "...";
+}
+
+/**
+ * 确保图片标题以 File: 前缀开头
+ * MediaWiki 的 titles 参数需要完整页面标题，否则会去主命名空间查找
+ * @param fileName 文件名
+ * @returns 规范化后的图片标题
+ */
+function normalizeImageTitle(fileName: string): string {
+  const trimmed = fileName.trim();
+  const lower = trimmed.toLowerCase();
+  if (
+    lower.startsWith("file:") ||
+    lower.startsWith("image:") ||
+    lower.startsWith("文件:")
+  ) {
+    return trimmed;
+  }
+  return `File:${trimmed}`;
+}
+
+/**
+ * 去除 File:/Image:/文件: 前缀，返回纯文件名
+ * @param fileName 文件标题
+ * @returns 纯文件名
+ */
+function stripImagePrefix(fileName: string): string {
+  const trimmed = fileName.trim();
+  const lower = trimmed.toLowerCase();
+  const prefixes = ["file:", "image:", "文件:"];
+  for (const p of prefixes) {
+    if (lower.startsWith(p)) {
+      return trimmed.substring(p.length);
+    }
+  }
+  return trimmed;
+}
+
 export {
   getAndProcessPageContent,
   generatePinyinInfo,
   logger,
   getErrorMessage,
   formatWikiTime,
+  normalizeChannelId,
+  truncateComment,
+  normalizeImageTitle,
+  stripImagePrefix,
 };

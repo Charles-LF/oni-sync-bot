@@ -19,6 +19,34 @@
 
 ---
 
+## [0.9.2] — 2026-07-23
+
+### Added
+
+- `client/onilogs/` 新增日志模块独立文件夹，包含 `index.vue` 和 `logs.vue`
+- `src/utils/tools.ts` 新增通用工具函数：`normalizeChannelId()`、`truncateComment()`、`normalizeImageTitle()`、`stripImagePrefix()`
+- `src/plugins/syncCommands.ts` 新增 `sync.contributor <title>` 和 `sync.allcontributors` 命令
+- `src/plugins/syncCommands.ts` 新增每周日凌晨2点的贡献者同步定时任务
+
+### Changed
+
+- `src/plugins/syncCommands.ts` — 将贡献者同步功能从独立插件合并到此文件中
+- `src/utils/tools.ts` — 集中管理通用工具函数，从 `syncCommands.ts` 和 `imgSync.ts` 迁移
+- `client/index.ts` — 日志页面路径改为 `/`，替换 Koishi 默认欢迎页
+- `client/index.ts` — 页面注册改为使用 `id: "home"` 覆盖默认欢迎页，并添加 `ready` 事件处理确保首次访问正确显示
+
+### Fixed
+
+- `src/sync/pageSync.ts` — 增量更新时贡献者和日期信息在内容未改变时不会更新的问题，修复为只要有变更记录就更新数据库
+- `src/plugins/syncContributor.ts` — `getContributorsAndTimestamp()` 函数中使用 `this.logger` 导致的 bug
+
+### Removed
+
+- 删除 `src/plugins/syncContributor.ts` 文件
+- 删除 `client/page.vue` 文件
+
+---
+
 ## [0.9.1] — 2026-06-24
 
 ### Added
@@ -82,7 +110,8 @@
 - 页面拼音查询与模糊搜索命令
 - 定时任务（基于 `koishi-plugin-cron`）
 
-[Unreleased]: https://github.com/Charles-lf/oni-sync-bot/compare/v0.9.1...HEAD
+[Unreleased]: https://github.com/Charles-lf/oni-sync-bot/compare/v0.9.2...HEAD
+[0.9.2]: https://github.com/Charles-lf/oni-sync-bot/releases/tag/v0.9.2
 [0.9.1]: https://github.com/Charles-lf/oni-sync-bot/releases/tag/v0.9.1
 [0.8.9]: https://github.com/Charles-lf/oni-sync-bot/releases/tag/v0.8.9
 [0.8.8]: https://github.com/Charles-lf/oni-sync-bot/releases/tag/v0.8.8

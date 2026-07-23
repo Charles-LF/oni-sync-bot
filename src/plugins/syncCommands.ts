@@ -1,4 +1,5 @@
-import { Context, Logger, Schema, Bot } from "koishi";
+import { Context, Logger, Schema, Bot, sleep } from "koishi";
+import { Mwn } from "mwn";
 import {} from "koishi-plugin-cron";
 import {
   incrementalUpdate,
@@ -8,7 +9,13 @@ import {
 } from "../sync/pageSync";
 import { syncModules, syncSingleModule } from "../sync/moduleSync";
 import { syncAllImages, syncSingleImage } from "../sync/imgSync";
-import { logger, getErrorMessage, formatWikiTime } from "../utils/tools";
+import {
+  logger,
+  getErrorMessage,
+  formatWikiTime,
+  normalizeChannelId,
+  truncateComment,
+} from "../utils/tools";
 
 export interface SyncCommandsConfig {
   logsUrl: string;
@@ -74,30 +81,13 @@ export class SyncCommands {
         });
     });
 
+    ctx.cron("0 0 2 * * 0", async () => {
+      logger.info("⏰ 开始执行每周日贡献者同步任务");
+      await this.syncAllContributors(ctx, "定时任务");
+    });
+    logger.info("✅ 每周日贡献者定时同步任务已注册（每周日凌晨2点执行）");
+
     this.registerCommands(ctx);
-  }
-
-  /**
-   * 规范化 channelId：兼容多种前缀格式
-   */
-  private normalizeChannelId(rawId: string): string {
-    const trimmed = rawId.trim();
-    if (!trimmed) return "";
-    const lower = trimmed.toLowerCase();
-    if (lower.startsWith("group:")) return trimmed.slice(6);
-    if (lower.startsWith("channel:")) return trimmed.slice(8);
-    if (lower.startsWith("qq:")) return trimmed.slice(3);
-    return trimmed;
-  }
-
-  /**
-   * 截断摘要到指定长度，超出部分用 ...
-   */
-  private truncateComment(text: string, max: number = 10): string {
-    if (!text) return "";
-    const clean = text.trim();
-    if (clean.length <= max) return clean;
-    return clean.slice(0, max) + "...";
   }
 
   /**
@@ -111,7 +101,6 @@ export class SyncCommands {
     if (!groupIds || groupIds.length === 0) return undefined;
 
     const platform = this.config.notifyBotPlatform || "qq";
-    const self = this;
 
     return async (items: SyncNotifyItem[]) => {
       try {
@@ -136,7 +125,7 @@ export class SyncCommands {
           const label = item.type === "image" ? "🖼️" : "📖";
           const zhTime = item.timestamp ? formatWikiTime(item.timestamp) : "";
           const user = item.user || "未知";
-          const shortComment = self.truncateComment(item.comment || "", 10);
+          const shortComment = truncateComment(item.comment || "", 10);
           const commentLine = shortComment ? `｜${shortComment}` : "";
           lines.push(
             `${label} ${i + 1}. ${item.title}｜${user}｜${zhTime}${commentLine}`,
@@ -146,7 +135,7 @@ export class SyncCommands {
 
         for (const bot of bots) {
           for (const rawChannelId of groupIds) {
-            const channelId = self.normalizeChannelId(rawChannelId);
+            const channelId = normalizeChannelId(rawChannelId);
             if (!channelId) continue;
             try {
               await bot.sendMessage(channelId, message);
@@ -336,6 +325,166 @@ export class SyncCommands {
           return `❌ 同步所有图片失败，请前往控制台查看日志:${this.config.logsUrl}`;
         }
       });
+
+    ctx
+      .command("sync.contributor <title:text>", "同步页面的贡献者", {
+        authority: 2,
+      })
+      .action(async ({ session }, title) => {
+        return this.syncSingleContributor(ctx, title);
+      });
+
+    ctx
+      .command("sync.allcontributors", "同步所有页面的贡献者", { authority: 2 })
+      .action(async ({ session }) => {
+        return this.syncAllContributors(ctx, "手动命令");
+      });
+  }
+
+  private async getContributorsAndTimestamp(title: string, sourceBot: Mwn) {
+    if (!title) return { contributor: "", change_time: "" };
+
+    try {
+      const res = await sourceBot.request({
+        action: "query",
+        format: "json",
+        prop: "revisions",
+        titles: title,
+        formatversion: "2",
+        rvprop: "timestamp|user",
+      });
+
+      if (res.query.pages[0].missing === true) {
+        return { contributor: "", change_time: "" };
+      }
+
+      const revisions = res.query.pages[0].revisions[0];
+      return {
+        contributor: revisions.user,
+        change_time: formatWikiTime(revisions.timestamp),
+      };
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      logger.error(`[同步贡献者] ❌ 处理 ${title} 时出错: ${errorMsg}`);
+      return { contributor: "", change_time: "" };
+    }
+  }
+
+  private async syncSingleContributor(
+    ctx: Context,
+    title: string,
+  ): Promise<string> {
+    try {
+      if (!ctx.wikiBot.isReady) {
+        const msg = "❌ WikiBot 服务尚未就绪，请稍后重试";
+        logger.warn(`[单页同步] ${msg}`);
+        return msg;
+      }
+
+      if (!ctx.wikiBot.isGGBotReady()) {
+        const msg = "❌ WIKIGG Bot 尚未就绪";
+        logger.warn(`[单页同步] ${msg}`);
+        return msg;
+      }
+
+      logger.info(`[单页同步] 开始处理页面: ${title}`);
+
+      const data = await this.getContributorsAndTimestamp(
+        title,
+        ctx.wikiBot.getGGBot(),
+      );
+
+      if (!data.contributor || data.contributor === "") {
+        const msg = `❌ 页面 "${title}" 不存在或未被编辑`;
+        logger.warn(`[单页同步] ${msg}`);
+        return msg;
+      }
+
+      await ctx.database.set(
+        "wikipages",
+        { title },
+        {
+          contributor: data.contributor,
+          change_time: data.change_time,
+        },
+      );
+
+      const successMsg = `✅ 页面 ${title} 的贡献者已同步为：${data.contributor}，时间：${data.change_time}`;
+      logger.info(`[单页同步] ${successMsg}`);
+      return successMsg;
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      const msg = `❌ 同步页面 "${title}" 的贡献者失败: ${errorMsg}`;
+      logger.error(`[单页同步] ${msg}`);
+      return msg;
+    }
+  }
+
+  private async syncAllContributors(
+    ctx: Context,
+    source: string,
+  ): Promise<string> {
+    try {
+      if (!ctx.wikiBot.isReady) {
+        const msg = "❌ WikiBot 服务尚未就绪";
+        logger.warn(`[${source}] ${msg}`);
+        return msg;
+      }
+
+      const pages = await ctx.database.get("wikipages", {});
+      logger.info(`[${source}] 开始处理 ${pages.length} 个页面`);
+
+      if (pages.length === 0) {
+        const msg = "⚠️ 数据库中没有页面数据";
+        logger.warn(`[${source}] ${msg}`);
+        return msg;
+      }
+
+      let successCount = 0;
+      let failCount = 0;
+      const failedPages: string[] = [];
+
+      for (const page of pages) {
+        await sleep(800);
+        try {
+          const data = await this.getContributorsAndTimestamp(
+            page.title,
+            ctx.wikiBot.getGGBot(),
+          );
+
+          if (data.contributor && data.contributor !== "") {
+            await ctx.database.set(
+              "wikipages",
+              { title: page.title },
+              {
+                contributor: data.contributor,
+                change_time: data.change_time,
+              },
+            );
+            successCount++;
+          }
+        } catch (err) {
+          failCount++;
+          const errorMsg = err instanceof Error ? err.message : String(err);
+          failedPages.push(page.title);
+          logger.error(`[${source}] 页面 ${page.title} 同步失败: ${errorMsg}`);
+        }
+      }
+
+      const resultMsg = `✅ 同步完成，成功: ${successCount}，失败: ${failCount}`;
+      logger.info(`[${source}] ${resultMsg}`);
+
+      if (failedPages.length > 0) {
+        logger.warn(`[${source}] 失败页面列表: ${failedPages.join(", ")}`);
+      }
+
+      return resultMsg;
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      const msg = `❌ 同步所有页面贡献者失败: ${errorMsg}`;
+      logger.error(`[${source}] ${msg}`);
+      return msg;
+    }
   }
 }
 

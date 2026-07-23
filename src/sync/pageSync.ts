@@ -524,16 +524,18 @@ async function handlePageSync(
   await ensurePageInDatabase(database, pageId, title);
 
   const result = await syncSinglePage(oldSite, newSite, title, user);
-  if (result.success && result.reason === "synced") {
-    syncedItems.push({
-      title,
-      type: "page",
-      user,
-      timestamp,
-      comment,
-    });
+  if (result.success) {
+    if (result.reason === "synced") {
+      syncedItems.push({
+        title,
+        type: "page",
+        user,
+        timestamp,
+        comment,
+      });
+    }
 
-    // 更新数据库中的贡献者信息
+    // 更新数据库中的贡献者信息（无论内容是否变化，只要有变更记录就更新）
     await updateContributorToDatabase(database, title, user, timestamp);
   }
 }
