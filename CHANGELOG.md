@@ -15,6 +15,8 @@
 
 ### Fixed
 
+- `src/plugins/queryCommands.ts` 修复模糊匹配算法：新增公共前缀匹配评分，解决相近词条无法返回到待选列表的问题
+
 ### Removed
 
 ---

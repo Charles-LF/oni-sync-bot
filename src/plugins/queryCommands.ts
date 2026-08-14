@@ -284,6 +284,13 @@ export class QueryCommands {
     return null;
   }
 
+  private getCommonPrefixLength(a: string, b: string): number {
+    const minLen = Math.min(a.length, b.length);
+    let i = 0;
+    while (i < minLen && a[i] === b[i]) i++;
+    return i;
+  }
+
   private calculateScore(
     page: WikiPages,
     queryKey: string,
@@ -297,15 +304,18 @@ export class QueryCommands {
     if (pinyin_full.startsWith(queryPinyinFull)) score += 9;
     if (pinyin_full.includes(queryPinyinFull)) score += 8;
     if (pinyin_first.includes(queryPinyinFirst)) score += 6;
-    if (
-      queryPinyinFull.includes(
-        pinyin_full.substring(
-          0,
-          Math.min(pinyin_full.length, queryPinyinFull.length),
-        ),
-      )
-    ) {
-      score += 5;
+
+    // 公共前缀匹配：标题或拼音有较长公共前缀时给予评分
+    const titlePrefixLen = this.getCommonPrefixLength(title, queryKey);
+    if (titlePrefixLen >= 2) {
+      score += titlePrefixLen;
+    }
+    const pinyinPrefixLen = this.getCommonPrefixLength(
+      pinyin_full,
+      queryPinyinFull,
+    );
+    if (pinyinPrefixLen >= 3) {
+      score += Math.floor(pinyinPrefixLen / 2);
     }
 
     return score;
