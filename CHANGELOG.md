@@ -19,6 +19,14 @@
 
 ---
 
+## [0.10.1] — 2026-10-16
+
+### Fixed
+
+- `WikiBotService` 的客户端代理在转发方法时丢失 `this` 绑定，导致 `continuedQueryGen` 抛 `Cannot read properties of undefined (reading 'request')`，所有批量路径（`sync.allpages` / `sync.allmodules` / `sync.allimgs` / `增量更新` 及对应定时任务）在第一次迭代即失败。现统一用 `apply(bot, args)` 转发；该逻辑抽到 `src/services/reloginAwareProxy.ts`，并补上回归测试（含「裸调用必然丢 this」的对照实验，防止测试退化为空测）
+
+---
+
 ## [0.10.0] — 2026-10-16
 
 大规模可维护性重构：消除模块级可变单例、按职责拆分上帝类、统一重试与配置声明、补齐单元测试，并修正查询打分的空串缺陷。
