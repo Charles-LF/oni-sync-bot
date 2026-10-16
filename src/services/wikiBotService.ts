@@ -3,15 +3,7 @@ import type { AccountConfig } from "../config";
 import { Mwn } from "mwn";
 import { logger, getErrorMessage } from "../utils/tools";
 import { withRetry } from "../utils/async";
-
-/** MediaWiki 登录态失效（`assert=user` 失败）时返回的错误码 */
-function isAssertUserFailed(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    (error as { code?: unknown }).code === "assertuserfailed"
-  );
-}
+import { createReloginAwareProxy } from "./reloginAwareProxy";
 
 declare module "koishi" {
   interface Context {
@@ -219,102 +211,19 @@ export class WikiBotService extends Service {
     return this.botOf("bwiki") !== null;
   }
 
-  /**
-   * 生成一个"登录态永远有效"的客户端代理。
-   *
-   * 设计说明（为什么必须是代理而不是普通对象）：
-   * Mwn 的方法很多，且调用方需要 `continuedQueryGen` 这类**异步生成器**以及
-   * `options` 这类**非函数属性**。用代理可以完整转发任意成员，同时把
-   * "assert=user 失败 → 重新登录 → 重放调用" 这件事对调用方完全隐藏。
-   */
   private createBotProxy(site: WikiSite): Mwn {
     const label = WikiBotService.siteLabel(site);
-    const METHODS_TO_SKIP = new Set(["cookieJar", "setRequestOptions"]);
 
-    const getCurrentBot = (): Mwn => {
-      const bot = this.botOf(site);
-      if (!bot) {
-        throw new Error(`${label} bot 尚未就绪，请检查登录配置或查看日志`);
-      }
-      return bot;
-    };
-
-    const memberOf = (bot: Mwn, prop: string | symbol): unknown =>
-      (bot as unknown as Record<string | symbol, unknown>)[prop];
-
-    /** 登录态失效时自动重登并重放一次调用 */
-    const invokeWithRelogin = async <T>(
-      invoke: (bot: Mwn) => Promise<T>,
-    ): Promise<T> => {
-      try {
-        return await invoke(getCurrentBot());
-      } catch (error) {
-        if (!isAssertUserFailed(error)) throw error;
-        await this.reloginSite(site);
-        return await invoke(getCurrentBot());
-      }
-    };
-
-    return new Proxy({} as Mwn, {
-      get: (_target, prop) => {
-        const value = memberOf(getCurrentBot(), prop);
-
-        // 非函数成员（如 options）直接透传
-        if (typeof value !== "function") return value;
-
-        // 这两个是登录相关的内部方法，必须绑定到当前 bot 本身
-        if (typeof prop === "string" && METHODS_TO_SKIP.has(prop)) {
-          return value.bind(this.botOf(site));
+    return createReloginAwareProxy({
+      getBot: () => {
+        const bot = this.botOf(site);
+        if (!bot) {
+          throw new Error(`${label} bot 尚未就绪，请检查登录配置或查看日志`);
         }
-
-        // 异步生成器要单独处理：重试必须发生在**迭代过程中**，
-        // 而不是创建生成器的那一刻。
-        if (prop === "continuedQueryGen") {
-          return (...args: unknown[]) => {
-            // 注意：下面 next() 是用方法简写定义的，其中的 this 指向返回的迭代器对象，
-            // 因此必须在这里先把重新登录的动作捕获成普通函数。
-            const relogin = () => this.reloginSite(site);
-
-            const createIterator = (callArgs: unknown[]) => {
-              const generate = memberOf(
-                getCurrentBot(),
-                "continuedQueryGen",
-              ) as unknown as (...a: unknown[]) => AsyncGenerator<unknown>;
-              return generate(...callArgs)[Symbol.asyncIterator]();
-            };
-
-            let iterator = createIterator(args);
-
-            return {
-              [Symbol.asyncIterator]() {
-                return this;
-              },
-              async next(): Promise<IteratorResult<unknown>> {
-                try {
-                  return await iterator.next();
-                } catch (error) {
-                  if (!isAssertUserFailed(error)) throw error;
-                  await relogin();
-                  iterator = createIterator(args);
-                  return await iterator.next();
-                }
-              },
-            };
-          };
-        }
-
-        return (...args: unknown[]) =>
-          invokeWithRelogin((bot) => {
-            const method = memberOf(bot, prop);
-            if (typeof method !== "function") {
-              throw new Error(`${label} bot 缺少方法 ${String(prop)}`);
-            }
-            const call = method as unknown as (
-              ...a: unknown[]
-            ) => Promise<unknown>;
-            return call.apply(bot, args);
-          });
+        return bot;
       },
+      relogin: () => this.reloginSite(site),
+      label,
     });
   }
 
