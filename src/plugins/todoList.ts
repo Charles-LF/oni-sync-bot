@@ -1,4 +1,25 @@
 import { Context, Logger, Session } from "koishi";
+import { sleep, withRetry } from "../utils/async";
+import type { WikiSite } from "../services/wikiBotService";
+
+/**
+ * MediaWiki revisions 查询返回的最新修订。
+ * 查询固定带 `rvprop=timestamp|user`，这两个字段在响应中必然存在，故声明为必填；
+ * `comment` 可能缺失。
+ */
+interface RevisionEntry {
+  timestamp: string;
+  user: string;
+  comment?: string;
+}
+
+/** MediaWiki revisions 查询返回的单页结构（只声明用到的字段） */
+interface ModuleRevision {
+  title?: string;
+  revisions?: RevisionEntry[];
+  /** 已选出的最新修订，便于调用方直接读取 */
+  revision: RevisionEntry;
+}
 import {} from "koishi-plugin-cron";
 
 declare module "koishi" {
@@ -94,13 +115,13 @@ export class TodoList {
     });
   }
 
-  private async getAllModulesFromGG(): Promise<any[]> {
-    const modules: any[] = [];
+  private async getAllModulesFromGG(): Promise<Array<{ title: string }>> {
+    const modules: Array<{ title: string }> = [];
     let apcontinue: string | undefined;
 
     try {
       do {
-        const params: any = {
+        const params: Record<string, string | number> = {
           action: "query",
           format: "json",
           list: "allpages",
@@ -117,7 +138,7 @@ export class TodoList {
         }
 
         const res = await this.apiCallWithRetry(() =>
-          this.ctx.wikiBot.ggbot.query(params),
+          this.ctx.wikiBot.getGGBot().query(params),
         );
 
         if (res.query?.allpages) {
@@ -135,33 +156,35 @@ export class TodoList {
     }
   }
 
-  private sleep(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-  }
-
-  private async apiCallWithRetry<T>(
+  private apiCallWithRetry<T>(
     apiCall: () => Promise<T>,
     maxRetries = 3,
   ): Promise<T> {
-    for (let i = 0; i < maxRetries; i++) {
-      try {
-        return await apiCall();
-      } catch (err) {
-        if (i === maxRetries - 1) {
-          throw err;
-        }
-        this.log.warn(`API 调用失败，正在重试 (${i + 1}/${maxRetries})...`);
-        await this.sleep(2000);
-      }
-    }
-    throw new Error("Max retries exceeded");
+    return withRetry(apiCall, {
+      attempts: maxRetries,
+      delayMs: 2000,
+      onRetry: (_error, attempt, attempts) =>
+        this.log.warn(`API 调用失败，正在重试 (${attempt}/${attempts})...`),
+    });
   }
 
-  private async getModuleRevisionFromGG(title: string): Promise<any | null> {
+  /**
+   * 读取指定站点上模块页面的最新修订信息。
+   * 原先 gg / bwiki 各有一份逐行相同的实现，只有站点不同 —— 合并为按站点寻址。
+   */
+  private async getModuleRevision(
+    site: WikiSite,
+    title: string,
+  ): Promise<ModuleRevision | null> {
+    const isGG = site === "gg";
+    const bot = isGG
+      ? this.ctx.wikiBot.getGGBot()
+      : this.ctx.wikiBot.getBWikiBot();
+
     try {
-      await this.sleep(1000);
+      await sleep(1000);
       const res = await this.apiCallWithRetry(() =>
-        this.ctx.wikiBot.ggbot.query({
+        bot.query({
           action: "query",
           format: "json",
           prop: "revisions",
@@ -172,49 +195,17 @@ export class TodoList {
         }),
       );
 
-      if (res.query?.pages && res.query.pages.length > 0) {
-        const page = res.query.pages[0];
-        if (page.revisions && page.revisions.length > 0) {
-          return {
-            ...page,
-            revision: page.revisions[0],
-          };
-        }
-      }
-      return null;
+      const page = res.query?.pages?.[0];
+      // MediaWiki 的 JSON 响应本身没有类型，这里做**一次**边界断言，
+      // 之后整条链路都是有类型的，不必回退到 any。
+      const revisions = page?.revisions as RevisionEntry[] | undefined;
+      if (!revisions?.length) return null;
+      return { title: page?.title, revisions, revision: revisions[0] };
     } catch (err) {
-      this.log.error(`从 wiki.gg 获取模块 ${title} 的修订信息失败`, err);
-      return null;
-    }
-  }
-
-  private async getModuleRevisionFromBWiki(title: string): Promise<any | null> {
-    try {
-      await this.sleep(1000);
-      const res = await this.apiCallWithRetry(() =>
-        this.ctx.wikiBot.bwikibot.query({
-          action: "query",
-          format: "json",
-          prop: "revisions",
-          titles: title,
-          formatversion: "2",
-          rvprop: "timestamp|user|comment",
-          rvlimit: "1",
-        }),
+      this.log.error(
+        `从 ${isGG ? "wiki.gg" : "bwiki"} 获取模块 ${title} 的修订信息失败`,
+        err,
       );
-
-      if (res.query?.pages && res.query.pages.length > 0) {
-        const page = res.query.pages[0];
-        if (page.revisions && page.revisions.length > 0) {
-          return {
-            ...page,
-            revision: page.revisions[0],
-          };
-        }
-      }
-      return null;
-    } catch (err) {
-      this.log.error(`从 bwikia 获取模块 ${title} 的修订信息失败`, err);
       return null;
     }
   }
@@ -235,7 +226,7 @@ export class TodoList {
     let updated = 0;
 
     for (const module of modules) {
-      const moduleData = await this.getModuleRevisionFromGG(module.title);
+      const moduleData = await this.getModuleRevision("gg", module.title);
 
       if (!moduleData || !moduleData.revision) {
         continue;
@@ -291,8 +282,8 @@ export class TodoList {
     for (const todo of todos) {
       checked++;
 
-      const ggRevision = await this.getModuleRevisionFromGG(todo.title);
-      const bwikiRevision = await this.getModuleRevisionFromBWiki(todo.title);
+      const ggRevision = await this.getModuleRevision("gg", todo.title);
+      const bwikiRevision = await this.getModuleRevision("bwiki", todo.title);
 
       if (!ggRevision || !ggRevision.revision) {
         continue;
@@ -336,7 +327,7 @@ export class TodoList {
       .command("todolist", "缺氧 TodoList")
       .alias("todo")
       .action(async ({ session }) => {
-        await session.execute("todo.list");
+        await session?.execute("todo.list");
       });
 
     ctx
@@ -351,7 +342,7 @@ export class TodoList {
       .alias("todo.a")
       .option("content", "-c <content>")
       .option("createdBy", "-u <createdBy>")
-      .action(async ({ session, options }, title) => {
+      .action(async ({ session, options = {} }, title) => {
         if (!title) {
           return "❌ 请提供标题！用法：todo.add <标题> [-c <内容>] [-u <创建人>]";
         }
@@ -378,7 +369,7 @@ export class TodoList {
       .option("title", "-t <title>")
       .option("content", "-c <content>")
       .option("createdBy", "-u <createdBy>")
-      .action(async ({ session, options }, idStr) => {
+      .action(async ({ session, options = {} }, idStr) => {
         const id = Number(idStr);
         if (!id || isNaN(id)) {
           return "❌ 请提供有效的 ID！";
@@ -557,8 +548,4 @@ export class TodoList {
       return { success: true };
     });
   }
-}
-
-export function apply(ctx: Context) {
-  ctx.plugin(TodoList);
 }

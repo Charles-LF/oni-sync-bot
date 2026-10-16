@@ -1,7 +1,7 @@
 {
   "name": "koishi-plugin-oni-sync-bot",
   "description": "缺氧Wiki站镜像点同步-测试",
-  "version": "0.9.3",
+  "version": "0.10.0",
   "main": "lib/index.js",
   "typings": "lib/index.d.ts",
   "files": [
@@ -14,6 +14,9 @@
     "koishi",
     "plugin"
   ],
+  "scripts": {
+    "test": "tsc -p tsconfig.test.json && mocha --recursive .test-build/tests"
+  },
   "koishi": {
     "description": "缺氧Wiki站镜像点同步-测试",
     "service": {
@@ -22,7 +25,10 @@
     }
   },
   "devDependencies": {
-    "@koishijs/client": "^5.30.11"
+    "@koishijs/client": "^5.30.11",
+    "@types/mocha": "^10.0.10",
+    "mocha": "^12.0.3",
+    "typescript": "^5.6.2"
   },
   "peerDependencies": {
     "@koishijs/plugin-console": "^5.30.11",
@@ -34,6 +40,6 @@
     "koishi-plugin-cron": "^3.1.0",
     "mwn": "^3.0.3",
     "node-fetch": "^3.3.2",
-    "pinyin-pro": "^3.29.1"
+    "pinyin-pro": "^3.29.5"
   }
 }

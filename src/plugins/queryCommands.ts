@@ -1,17 +1,14 @@
-import { Context, Schema } from "koishi";
+import { Context, Session } from "koishi";
+import type { SiteConfig } from "../config";
 import { generatePinyinInfo } from "../utils/tools";
+import { findFuzzyMatches, type MatchResult } from "../utils/matcher";
+import { MessageRenderer } from "../services/messageRenderer";
 import { WikiPages } from "./databaseExtension";
 
-export interface QueryCommandsConfig {
-  domain: string;
-}
+/** 只用到共享站点配置里的 domain */
+export type QueryCommandsConfig = Pick<SiteConfig, "domain">;
 
-interface MatchResult {
-  id: number;
-  title: string;
-  score: number;
-}
-
+/** 需要特殊回复的关键词（命中后直接返回预设文案） */
 const SPECIAL_CASES = new Map([
   [
     "火箭计算器",
@@ -19,14 +16,17 @@ const SPECIAL_CASES = new Map([
   ],
 ]);
 
+/** `x` / `查wiki` 命令：精准匹配 + 拼音模糊匹配 + 序号选择 */
 export class QueryCommands {
   public static readonly inject = ["database"];
   public config: QueryCommandsConfig;
   private ctx: Context;
+  private renderer: MessageRenderer;
 
   constructor(ctx: Context, config: QueryCommandsConfig) {
     this.ctx = ctx;
     this.config = config;
+    this.renderer = new MessageRenderer(ctx, config.domain);
     this.registerCommands(ctx);
   }
 
@@ -38,12 +38,12 @@ export class QueryCommands {
         const queryKey = itemName.trim().toLowerCase();
 
         if (!queryKey) {
-          return this.renderUsageMessage(session);
+          return this.renderer.usageMessage(session);
         }
 
-        if (SPECIAL_CASES.has(queryKey)) {
-          const content = SPECIAL_CASES.get(queryKey);
-          return this.sendResponse(session, content);
+        const specialCase = SPECIAL_CASES.get(queryKey);
+        if (specialCase !== undefined) {
+          return this.renderer.send(session, specialCase);
         }
 
         const { pinyin_full: queryPinyinFull, pinyin_first: queryPinyinFirst } =
@@ -56,29 +56,29 @@ export class QueryCommands {
           queryPinyinFirst,
         );
         if (preciseMatch) {
-          return this.renderResultMessage(
+          return this.renderer.resultMessage(
             session,
             preciseMatch,
-            (preciseMatch as any).prefix,
+            preciseMatch.prefix,
           );
         }
 
         const allPages = await ctx.database.get("wikipages", {});
         if (allPages.length === 0) {
-          return this.sendResponse(
+          return this.renderer.send(
             session,
             "❌ 本地缓存为空，请联系管理员执行【update】指令更新缓存！",
           );
         }
 
-        const fuzzyMatches = this.findFuzzyMatches(
+        const fuzzyMatches = findFuzzyMatches(
           allPages,
           queryKey,
           queryPinyinFull,
           queryPinyinFirst,
         );
         if (fuzzyMatches.length === 0) {
-          return this.sendResponse(
+          return this.renderer.send(
             session,
             `❌ 未找到【${queryKey}】相关内容，请按游戏内标准名称重新查询！`,
           );
@@ -88,175 +88,14 @@ export class QueryCommands {
       });
   }
 
-  private isQQPlatform(session: any): boolean {
-    return session?.platform === "qq";
-  }
-
-  private buildLinkButton(idSuffix: string, label: string, url: string): any {
-    return {
-      id: `btn-${idSuffix}`,
-      render_data: {
-        label,
-        visited_label: "已打开",
-        style: 1,
-      },
-      action: {
-        type: 0,
-        permission: {
-          type: 2,
-        },
-        data: url,
-      },
-    };
-  }
-
-  private buildQQKeyboard(matches: MatchResult[]): any {
-    const rows: any[] = [];
-    for (let i = 0; i < matches.length; i += 2) {
-      const buttonsInRow = matches.slice(i, i + 2).map((item) => {
-        const label =
-          item.title.length > 10 ? item.title.slice(0, 10) : item.title;
-        return this.buildLinkButton(
-          `${item.id}`,
-          label,
-          `https://${this.config.domain}/bw/${item.id}`,
-        );
-      });
-      rows.push({ buttons: buttonsInRow });
-    }
-    return {
-      content: { rows },
-    };
-  }
-
-  private async sendResponse(session: any, content: string, keyboard?: any) {
-    if (this.isQQPlatform(session)) {
-      try {
-        const payload: any = {
-          msg_id: session.messageId,
-          msg_type: 2,
-          markdown: {
-            content,
-          },
-        };
-        if (keyboard) {
-          payload.keyboard = keyboard;
-        }
-        await session.bot.internal.sendMessage(session.channelId, payload);
-        return;
-      } catch (e) {
-        this.ctx
-          .logger("oni-sync-bot")
-          .warn("QQ Markdown 发送失败，降级为纯文本:", e);
-        return content;
-      }
-    }
-    return content;
-  }
-
-  private renderUsageMessage(session: any) {
-    if (this.isQQPlatform(session)) {
-      const md =
-        "**以下是使用说明：**\n" +
-        `> GG原站点: [https://${this.config.domain}/gg/88888888](https://${this.config.domain}/gg/88888888)\n` +
-        `\n> bwiki: [https://${this.config.domain}/bw/88888888](https://${this.config.domain}/bw/88888888)\n`;
-      return this.sendResponse(session, md);
-    }
-    return (
-      `以下是使用说明：\nGG原站点: https://${this.config.domain}/gg/88888888\n` +
-      `\nbwiki: https://${this.config.domain}/bw/88888888`
-    );
-  }
-
-  private buildResultKeyboard(match: WikiPages): any {
-    return {
-      content: {
-        rows: [
-          {
-            buttons: [
-              this.buildLinkButton(
-                `gg-${match.id}`,
-                "GG 原站",
-                `https://${this.config.domain}/gg/${match.id}`,
-              ),
-            ],
-          },
-          {
-            buttons: [
-              this.buildLinkButton(
-                `bw-${match.id}`,
-                "Bwiki 镜像",
-                `https://${this.config.domain}/bw/${match.id}`,
-              ),
-            ],
-          },
-          {
-            buttons: [
-              this.buildLinkButton(
-                `wiki-${match.id}`,
-                "GG直链",
-                `https://oxygennotincluded.wiki.gg/zh/${encodeURIComponent(match.title)}`,
-              ),
-            ],
-          },
-        ],
-      },
-    };
-  }
-
-  private renderResultMessage(session: any, match: WikiPages, prefix?: string) {
-    if (this.isQQPlatform(session)) {
-      let md = "";
-      if (prefix) {
-        md += `**${prefix}**\n`;
-      }
-      md += `**📖 ${match.title}**\n\n`;
-
-      // 添加贡献者和修改时间信息
-      if (match.contributor || match.change_time) {
-        md += "---\n";
-        if (match.contributor) {
-          md += `> **👤 最后贡献者：** ${match.contributor}\n`;
-        }
-        if (match.change_time) {
-          md += `> **🕐 最后修改：** ${match.change_time}\n`;
-        }
-        md += "惟知是信  至诚若天\n---\n";
-      }
-
-      const keyboard = this.buildResultKeyboard(match);
-      return this.sendResponse(session, md, keyboard);
-    }
-    let message = "";
-    if (prefix) {
-      message += prefix + "\n";
-    }
-    message += `📖 ${match.title}\n`;
-
-    // 添加贡献者和修改时间信息
-    if (match.contributor || match.change_time) {
-      message += "--------\n";
-      if (match.contributor) {
-        message += `👤 最后贡献者：${match.contributor}\n`;
-      }
-      if (match.change_time) {
-        message += `🕐 最后修改：${match.change_time}\n`;
-      }
-    }
-    message += "惟知是信  至诚若天\n";
-    message += "--------\n";
-    message += `🔗 GG原站点: \`https://${this.config.domain}/gg/${match.id}\`\n`;
-    message += `📚 bwiki: \`https://${this.config.domain}/bw/${match.id}\``;
-    return message;
-  }
-
+  /** 标题 / 全拼 / 首字母三种精准匹配，命中即返回（带用于展示的前缀文案） */
   private async findPreciseMatch(
     ctx: Context,
     queryKey: string,
     queryPinyinFull: string,
     queryPinyinFirst: string,
   ): Promise<(WikiPages & { prefix?: string }) | null> {
-    const checks: Array<{ query: any; prefix?: string }> = [
+    const checks: Array<{ query: Record<string, string>; prefix?: string }> = [
       { query: { title: queryKey }, prefix: "✅ 精准匹配成功" },
       {
         query: { pinyin_full: queryKey },
@@ -284,126 +123,49 @@ export class QueryCommands {
     return null;
   }
 
-  private getCommonPrefixLength(a: string, b: string): number {
-    const minLen = Math.min(a.length, b.length);
-    let i = 0;
-    while (i < minLen && a[i] === b[i]) i++;
-    return i;
-  }
-
-  private calculateScore(
-    page: WikiPages,
-    queryKey: string,
-    queryPinyinFull: string,
-    queryPinyinFirst: string,
-  ): number {
-    let score = 0;
-    const { title, pinyin_full, pinyin_first } = page;
-
-    if (title.includes(queryKey)) score += 10;
-    if (pinyin_full.startsWith(queryPinyinFull)) score += 9;
-    if (pinyin_full.includes(queryPinyinFull)) score += 8;
-    if (pinyin_first.includes(queryPinyinFirst)) score += 6;
-
-    // 公共前缀匹配：标题或拼音有较长公共前缀时给予评分
-    const titlePrefixLen = this.getCommonPrefixLength(title, queryKey);
-    if (titlePrefixLen >= 2) {
-      score += titlePrefixLen;
-    }
-    const pinyinPrefixLen = this.getCommonPrefixLength(
-      pinyin_full,
-      queryPinyinFull,
-    );
-    if (pinyinPrefixLen >= 3) {
-      score += Math.floor(pinyinPrefixLen / 2);
-    }
-
-    return score;
-  }
-
-  private findFuzzyMatches(
-    allPages: WikiPages[],
-    queryKey: string,
-    queryPinyinFull: string,
-    queryPinyinFirst: string,
-  ): MatchResult[] {
-    const matchResults: MatchResult[] = [];
-
-    for (const page of allPages) {
-      const score = this.calculateScore(
-        page,
-        queryKey,
-        queryPinyinFull,
-        queryPinyinFirst,
-      );
-      if (score > 0) {
-        matchResults.push({ id: page.id, title: page.title, score });
-      }
-    }
-
-    return matchResults
-      .sort((a, b) => b.score - a.score || a.title.length - b.title.length)
-      .filter(
-        (item, index, array) =>
-          array.findIndex((t) => t.title === item.title) === index,
-      )
-      .slice(0, 5);
-  }
-
+  /**
+   * 处理多候选选择：
+   * - QQ：直接回按钮列表，结束；
+   * - 其它平台：提示输入序号并等待 15 秒。
+   */
   private async handleSelection(
-    session: any,
+    session: Session | undefined,
     matches: MatchResult[],
-  ): Promise<any> {
+  ): Promise<string | undefined> {
     const resultCount = matches.length;
 
-    let replyMsg: string;
-
-    if (this.isQQPlatform(session)) {
-      let md = `**🔍 为你找到【 ${resultCount} 】个相似结果，请点击下方按钮查看详情：**\n`;
+    if (this.renderer.isQQ(session)) {
+      let markdown = `**🔍 为你找到【 ${resultCount} 】个相似结果，请点击下方按钮查看详情：**\n`;
       matches.forEach((item, index) => {
-        md += `\n> \`${index + 1}\`. **${item.title}**\n`;
+        markdown += `\n> \`${index + 1}\`. **${item.title}**\n`;
       });
-      const keyboard = this.buildQQKeyboard(matches);
-      await this.sendResponse(session, md, keyboard);
-      return;
+      return this.renderer.send(
+        session,
+        markdown,
+        this.renderer.matchListKeyboard(matches),
+      );
     }
 
-    replyMsg = `🔍 未找到精准匹配，为你找到【 ${resultCount} 】个相似结果，请输入序号选择（10秒内有效）：\n`;
+    let replyMsg = `🔍 未找到精准匹配，为你找到【 ${resultCount} 】个相似结果，请输入序号选择（10秒内有效）：\n`;
     matches.forEach((item, index) => {
       replyMsg += `${index + 1}. ${item.title}\n`;
     });
     replyMsg += `\n❗️ 提示：超时将静默结束，无任何回应`;
 
-    await this.sendResponse(session, replyMsg);
+    await this.renderer.send(session, replyMsg);
 
-    const userInput = await session.prompt(15000);
+    const userInput = await session?.prompt(15000);
     if (!userInput) return;
 
     const selectNum = parseInt(userInput.trim(), 10);
     if (isNaN(selectNum) || selectNum < 1 || selectNum > resultCount) {
-      return this.sendResponse(
+      return this.renderer.send(
         session,
         `❌ 输入无效！请输入 1-${resultCount} 之间的数字序号`,
       );
     }
 
     const selected = matches[selectNum - 1];
-    return this.renderResultMessage(
-      session,
-      selected as unknown as WikiPages,
-      "✅ 选择成功",
-    );
+    return this.renderer.resultMessage(session, selected, "✅ 选择成功");
   }
-}
-
-export namespace QueryCommands {
-  export const Config: Schema<QueryCommandsConfig> = Schema.object({
-    domain: Schema.string()
-      .description("你的短链域名（必填，如：klei.vip）")
-      .default("klei.vip"),
-  });
-}
-
-export function apply(ctx: Context, config: QueryCommandsConfig) {
-  ctx.plugin(QueryCommands, config);
 }

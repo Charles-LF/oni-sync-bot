@@ -29,7 +29,3 @@ export class DatabaseExtension {
     });
   }
 }
-
-export function apply(ctx: Context) {
-  ctx.plugin(DatabaseExtension);
-}

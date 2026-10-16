@@ -74,9 +74,10 @@ async function getAndProcessPageContent(
         });
 
         if (queryRes && queryRes.query && queryRes.query.pages) {
-          const pageIds = Object.keys(queryRes.query.pages);
+          const pages = queryRes.query.pages as Record<string, any>;
+          const pageIds = Object.keys(pages);
           if (pageIds.length > 0) {
-            const page = queryRes.query.pages[pageIds[0]];
+            const page = pages[pageIds[0]];
             if (page.revisions && page.revisions.length > 0) {
               rawText = page.revisions[0].content || "";
             }
@@ -142,22 +143,27 @@ function getErrorMessage(error: unknown): string {
 }
 
 /**
- * 将 MediaWiki ISO 时间戳（如 "2024-06-19T10:30:45Z"）转为北京时间可读字符串
+ * 将 MediaWiki ISO 时间戳（如 "2024-06-19T10:30:45Z"）转为北京时间可读字符串。
+ *
+ * 实现要点：先把时间戳整体平移 +8 小时，再统一用 UTC 取值。
+ * 这样结果与**运行机器的本地时区无关**，且 +8 造成的跨日/跨月/跨年进位由 Date 自动处理
+ * （早期实现混用 getFullYear 与 getUTCHours，只在 UTC+8 机器上碰巧正确）。
  */
 function formatWikiTime(isoString: string): string {
-  try {
-    const date = new Date(isoString);
-    if (Number.isNaN(date.getTime())) return isoString;
-    const pad = (n: number) => String(n).padStart(2, "0");
-    const y = date.getFullYear();
-    const m = pad(date.getMonth() + 1);
-    const d = pad(date.getDate());
-    const hh = pad((date.getUTCHours() + 8) % 24);
-    const mm = pad(date.getUTCMinutes());
-    return `${y}-${m}-${d} ${hh}:${mm}`;
-  } catch {
-    return isoString;
-  }
+  const date = new Date(isoString);
+  if (Number.isNaN(date.getTime())) return isoString;
+
+  const BEIJING_OFFSET_MS = 8 * 60 * 60 * 1000;
+  const beijing = new Date(date.getTime() + BEIJING_OFFSET_MS);
+  const pad = (n: number) => String(n).padStart(2, "0");
+
+  const y = beijing.getUTCFullYear();
+  const m = pad(beijing.getUTCMonth() + 1);
+  const d = pad(beijing.getUTCDate());
+  const hh = pad(beijing.getUTCHours());
+  const mm = pad(beijing.getUTCMinutes());
+
+  return `${y}-${m}-${d} ${hh}:${mm}`;
 }
 
 /**

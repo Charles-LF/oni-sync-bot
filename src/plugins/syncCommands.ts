@@ -1,34 +1,19 @@
-import { Context, Logger, Schema, Bot, sleep } from "koishi";
+import { Context } from "koishi";
+import type { NotifyConfig } from "../config";
+import { sleep } from "../utils/async";
 import { Mwn } from "mwn";
 import {} from "koishi-plugin-cron";
-import {
-  incrementalUpdate,
-  syncPages,
-  syncSinglePage,
-  SyncNotifyItem,
-} from "../sync/pageSync";
-import { syncModules, syncSingleModule } from "../sync/moduleSync";
-import { syncAllImages, syncSingleImage } from "../sync/imgSync";
-import {
-  logger,
-  getErrorMessage,
-  formatWikiTime,
-  normalizeChannelId,
-  truncateComment,
-} from "../utils/tools";
+import { PageSyncer, SyncNotifyItem } from "../sync/pageSync";
+import { ModuleSyncer } from "../sync/moduleSync";
+import { ImageSyncer } from "../sync/imgSync";
+import { SyncNotifier } from "../services/syncNotifier";
+import { logger, formatWikiTime } from "../utils/tools";
 
-export interface SyncCommandsConfig {
-  logsUrl: string;
-  ggUsername: string;
-  ggPassword: string;
-  bwikiusername: string;
-  bwikipassword: string;
-  domain: string;
-  main_site: string;
-  bwiki_site: string;
-  notifyGroupIds?: string[];
-  notifyBotPlatform?: string;
-}
+/**
+ * 实际只消费日志地址与通知字段；账号与站点配置由其它子插件使用，
+ * 因此这里不再重复声明（详见 src/config.ts）。
+ */
+export type SyncCommandsConfig = NotifyConfig;
 
 export class SyncCommands {
   public static readonly inject = ["wikiBot", "database", "cron"];
@@ -39,24 +24,35 @@ export class SyncCommands {
     this.config = config;
     logger.info("WikiBot 服务已就绪，初始化定时任务和指令");
 
-    this.notifyFn = this.buildNotifyFn(ctx);
+    const notifier = new SyncNotifier(
+      ctx,
+      config.notifyGroupIds,
+      config.notifyBotPlatform,
+    );
+    this.notifyFn = notifier.enabled
+      ? (items) => void notifier.notify(items)
+      : undefined;
 
+    this.registerScheduledTasks(ctx);
+    this.registerCommands(ctx);
+  }
+
+  /** 同步相关的定时任务；cron 表达式即调度策略，集中在一处便于对照 */
+  private registerScheduledTasks(ctx: Context) {
     ctx.cron("15 * * * *", async () => {
       if (!(await this.ensureBotsReady(ctx, "增量更新"))) return;
 
-      await incrementalUpdate(
-        ctx.wikiBot.getGGBot(),
-        ctx.wikiBot.getBWikiBot(),
-        config,
-        this.notifyFn,
-        ctx.database,
-      );
+      await new PageSyncer(ctx.wikiBot.getGGBot(), ctx.wikiBot.getBWikiBot(), {
+        database: ctx.database,
+        notify: this.notifyFn,
+      }).incrementalUpdate();
     });
 
     ctx.cron("30 8 * * 4", async () => {
       if (!(await this.ensureBotsReady(ctx, "同步所有页面"))) return;
 
-      await syncPages(ctx.wikiBot.getGGBot(), ctx.wikiBot.getBWikiBot())
+      await new PageSyncer(ctx.wikiBot.getGGBot(), ctx.wikiBot.getBWikiBot())
+        .syncAll()
         .then(() => {
           logger.info("自动任务：尝试同步所有页面，从 WIKIGG 到 bwiki");
         })
@@ -68,11 +64,11 @@ export class SyncCommands {
     ctx.cron("30 8 * * 3", async () => {
       if (!(await this.ensureBotsReady(ctx, "同步所有图片"))) return;
 
-      await syncAllImages(
+      await new ImageSyncer(
         ctx.wikiBot.getGGBot(),
         ctx.wikiBot.getBWikiBot(),
-        config,
       )
+        .syncAll()
         .then(() => {
           logger.info("自动任务：尝试同步所有图片，从 WIKIGG 到 bwiki");
         })
@@ -86,104 +82,17 @@ export class SyncCommands {
       await this.syncAllContributors(ctx, "定时任务");
     });
     logger.info("✅ 每周日贡献者定时同步任务已注册（每周日凌晨2点执行）");
-
-    this.registerCommands(ctx);
   }
 
-  /**
-   * 构建增量更新同步成功的通知回调
-   * 当配置了 notifyGroupIds 时，将同步成功的页面/图片合并成一条消息推送到指定 QQ 群
-   */
-  private buildNotifyFn(
-    ctx: Context,
-  ): ((items: SyncNotifyItem[]) => void) | undefined {
-    const groupIds = this.config.notifyGroupIds;
-    if (!groupIds || groupIds.length === 0) return undefined;
-
-    const platform = this.config.notifyBotPlatform || "qq";
-
-    return async (items: SyncNotifyItem[]) => {
-      try {
-        if (!items || items.length === 0) return;
-
-        const bots: Bot[] = [];
-        for (const bot of ctx.bots) {
-          if (bot.platform === platform && bot.isActive) {
-            bots.push(bot);
-          }
-        }
-        if (bots.length === 0) {
-          logger.warn(`[通知] 未找到可用的 ${platform} 平台 bot，跳过群通知`);
-          return;
-        }
-
-        const lines: string[] = [];
-        lines.push(`Wiki 同步更新（${items.length} 条）`);
-        lines.push("");
-        for (let i = 0; i < items.length; i++) {
-          const item = items[i];
-          const label = item.type === "image" ? "🖼️" : "📖";
-          const zhTime = item.timestamp ? formatWikiTime(item.timestamp) : "";
-          const user = item.user || "未知";
-          const shortComment = truncateComment(item.comment || "", 10);
-          const commentLine = shortComment ? `｜${shortComment}` : "";
-          lines.push(
-            `${label} ${i + 1}. ${item.title}｜${user}｜${zhTime}${commentLine}`,
-          );
-        }
-        const message = lines.join("\n");
-
-        for (const bot of bots) {
-          for (const rawChannelId of groupIds) {
-            const channelId = normalizeChannelId(rawChannelId);
-            if (!channelId) continue;
-            try {
-              await bot.sendMessage(channelId, message);
-              logger.info(
-                `[通知] 向 ${bot.platform}/${channelId} 推送成功 (${items.length} 条)`,
-              );
-            } catch (error) {
-              logger.error(
-                `[通知] 向 ${bot.platform}/${channelId} 发送消息失败:`,
-                getErrorMessage(error),
-              );
-            }
-          }
-        }
-      } catch (error) {
-        logger.error(`[通知] 处理通知过程出错:`, getErrorMessage(error));
-      }
-    };
-  }
-
-  /**
-   * 确保机器人就绪，如果未就绪则尝试重新登录
-   * @param ctx Koishi 上下文
-   * @param taskName 任务名称（用于日志）
-   * @returns 机器人是否已就绪
-   */
   private async ensureBotsReady(
     ctx: Context,
     taskName: string,
   ): Promise<boolean> {
-    // 检查并尝试重新登录失效的机器人
-    if (!ctx.wikiBot.isGGBotReady() || !ctx.wikiBot.isBWikiBotReady()) {
-      logger.warn(`检测到部分机器人未就绪，尝试重新登录...`);
-      try {
-        await ctx.wikiBot.relogin();
-      } catch (error) {
-        logger.error(`重新登录失败: ${error}`);
-        return false;
-      }
-    }
+    const { gg, bwiki } = await ctx.wikiBot.ensureReady();
 
-    // 最终检查机器人是否真正就绪
-    const ggReady = ctx.wikiBot.isGGBotReady();
-    const bwikiReady = ctx.wikiBot.isBWikiBotReady();
-
-    if (!ggReady || !bwikiReady) {
+    if (!gg || !bwiki) {
       logger.warn(
-        `${taskName} 跳过：Wiki 机器人仍未就绪 - WIKIGG: ${ggReady ? "✅" : "❌"}, bwiki: ${bwikiReady ? "✅" : "❌"}`,
+        `${taskName} 跳过：Wiki 机器人仍未就绪 - WIKIGG: ${gg ? "✅" : "❌"}, bwiki: ${bwiki ? "✅" : "❌"}`,
       );
       return false;
     }
@@ -199,12 +108,10 @@ export class SyncCommands {
           return "❌ Wiki 机器人未就绪，请检查登录配置或查看日志";
         }
         try {
-          await syncSinglePage(
+          await new PageSyncer(
             ctx.wikiBot.getGGBot(),
             ctx.wikiBot.getBWikiBot(),
-            pageTitle,
-            "sync-bot",
-          );
+          ).syncOne(pageTitle, "sync-bot");
           return `✅ 已尝试同步页面：${pageTitle}，请前往控制台查看：${this.config.logsUrl}`;
         } catch (err) {
           logger.error(`同步页面 ${pageTitle} 失败，错误信息：${err}`);
@@ -222,12 +129,11 @@ export class SyncCommands {
           return "❌ Wiki 机器人未就绪，请检查登录配置或查看日志";
         }
         try {
-          await incrementalUpdate(
+          await new PageSyncer(
             ctx.wikiBot.getGGBot(),
             ctx.wikiBot.getBWikiBot(),
-            this.config,
-            this.notifyFn,
-          );
+            { notify: this.notifyFn },
+          ).incrementalUpdate();
           return `✅ 已尝试获取三小时前的编辑并同步，请前往控制台查看：${this.config.logsUrl}`;
         } catch (err) {
           logger.error(`增量更新失败，错误信息：${err}`);
@@ -242,7 +148,10 @@ export class SyncCommands {
           return "❌ Wiki 机器人未就绪，请检查登录配置或查看日志";
         }
         try {
-          await syncPages(ctx.wikiBot.getGGBot(), ctx.wikiBot.getBWikiBot());
+          await new PageSyncer(
+            ctx.wikiBot.getGGBot(),
+            ctx.wikiBot.getBWikiBot(),
+          ).syncAll();
           return `✅ 已尝试同步所有页面，请前往控制台查看：${this.config.logsUrl}`;
         } catch (err) {
           logger.error(`同步所有页面失败，错误信息：${err}`);
@@ -259,12 +168,10 @@ export class SyncCommands {
           return "❌ Wiki 机器人未就绪，请检查登录配置或查看日志";
         }
         try {
-          await syncSingleModule(
+          await new ModuleSyncer(
             ctx.wikiBot.getGGBot(),
             ctx.wikiBot.getBWikiBot(),
-            moduleTitle,
-            "sync-bot",
-          );
+          ).syncOne(moduleTitle, "sync-bot");
           return `✅ 已尝试同步模块：${moduleTitle}，请前往控制台查看：${this.config.logsUrl}`;
         } catch (err) {
           logger.error(`同步模块 ${moduleTitle} 失败，错误信息：${err}`);
@@ -279,7 +186,10 @@ export class SyncCommands {
           return "❌ Wiki 机器人未就绪，请检查登录配置或查看日志";
         }
         try {
-          await syncModules(ctx.wikiBot.getGGBot(), ctx.wikiBot.getBWikiBot());
+          await new ModuleSyncer(
+            ctx.wikiBot.getGGBot(),
+            ctx.wikiBot.getBWikiBot(),
+          ).syncAll();
           return `✅ 已尝试同步所有模块，请前往控制台查看：${this.config.logsUrl}`;
         } catch (err) {
           logger.error(`同步所有模块失败，错误信息：${err}`);
@@ -294,11 +204,11 @@ export class SyncCommands {
           return "❌ Wiki 机器人未就绪，请检查登录配置或查看日志";
         }
         try {
-          await syncSingleImage(
+          await new ImageSyncer(
             ctx.wikiBot.getGGBot(),
             ctx.wikiBot.getBWikiBot(),
+          ).syncOne(
             `${imgTitle.startsWith("File:") ? "" : "File:"}${imgTitle}`,
-            this.config,
           );
           return `✅ 已尝试同步图片：${imgTitle}`;
         } catch (err) {
@@ -314,11 +224,10 @@ export class SyncCommands {
           return "❌ Wiki 机器人未就绪，请检查登录配置或查看日志";
         }
         try {
-          await syncAllImages(
+          await new ImageSyncer(
             ctx.wikiBot.getGGBot(),
             ctx.wikiBot.getBWikiBot(),
-            this.config,
-          );
+          ).syncAll();
           return `✅ 已尝试同步所有图片，请前往控制台查看：${this.config.logsUrl}`;
         } catch (err) {
           logger.error(`同步所有图片失败，错误信息：${err}`);
@@ -354,11 +263,15 @@ export class SyncCommands {
         rvprop: "timestamp|user",
       });
 
-      if (res.query.pages[0].missing === true) {
+      const page = res.query?.pages?.[0];
+      if (!page || page.missing === true) {
         return { contributor: "", change_time: "" };
       }
 
-      const revisions = res.query.pages[0].revisions[0];
+      const revisions = page.revisions?.[0];
+      if (!revisions) {
+        return { contributor: "", change_time: "" };
+      }
       return {
         contributor: revisions.user,
         change_time: formatWikiTime(revisions.timestamp),
@@ -486,39 +399,4 @@ export class SyncCommands {
       return msg;
     }
   }
-}
-
-export namespace SyncCommands {
-  export const Config: Schema<SyncCommandsConfig> = Schema.object({
-    ggUsername: Schema.string().description("WIKIGG 用户名").default("1"),
-    ggPassword: Schema.string().description("WIKIGG 密码").default("1"),
-    bwikiusername: Schema.string().description("bwiki用户名").default("1"),
-    bwikipassword: Schema.string().description("bwiki密码").default("1"),
-    domain: Schema.string()
-      .description("你的短链域名（必填，如：klei.vip）")
-      .default("klei.vip"),
-    main_site: Schema.string()
-      .description("主站域名（必填，如：oxygennotincluded.wiki.gg）")
-      .default("oxygennotincluded.wiki.gg/zh"),
-    bwiki_site: Schema.string()
-      .description("镜像站域名（必填，如：wiki.biligame.com）")
-      .default("wiki.biligame.com/oni"),
-    logsUrl: Schema.string()
-      .description("日志查看地址")
-      .default("https://klei.vip/onilogs"),
-    notifyGroupIds: Schema.array(Schema.string())
-      .description(
-        '增量更新同步成功时通知的群频道ID列表，如 ["group:123456"]，留空则不发送通知',
-      )
-      .default([]),
-    notifyBotPlatform: Schema.string()
-      .description("通知 bot 的平台标识，默认 qq")
-      .default("qq"),
-  });
-}
-
-export function apply(ctx: Context, config: SyncCommandsConfig) {
-  ctx.inject(["wikiBot"], (ctx) => {
-    ctx.plugin(SyncCommands, config);
-  });
 }

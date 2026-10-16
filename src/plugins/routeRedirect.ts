@@ -1,11 +1,9 @@
-import { Context, Schema } from "koishi";
+import { Context } from "koishi";
 import {} from "@koishijs/plugin-server";
+import type { SiteConfig } from "../config";
 
-export interface RouteRedirectConfig {
-  domain: string;
-  main_site: string;
-  bwiki_site: string;
-}
+/** 站点配置来自共享分组，键名与默认值见 src/config.ts */
+export type RouteRedirectConfig = SiteConfig;
 
 export class RouteRedirect {
   public static readonly inject = ["database", "server"];
@@ -61,22 +59,4 @@ export class RouteRedirect {
       return;
     });
   }
-}
-
-export namespace RouteRedirect {
-  export const Config: Schema<RouteRedirectConfig> = Schema.object({
-    domain: Schema.string()
-      .description("你的短链域名（必填，如：klei.vip）")
-      .default("klei.vip"),
-    main_site: Schema.string()
-      .description("主站域名（必填，如：oxygennotincluded.wiki.gg）")
-      .default("oxygennotincluded.wiki.gg/zh"),
-    bwiki_site: Schema.string()
-      .description("镜像站域名（必填，如：wiki.biligame.com）")
-      .default("wiki.biligame.com/oni"),
-  });
-}
-
-export function apply(ctx: Context, config: RouteRedirectConfig) {
-  ctx.plugin(RouteRedirect, config);
 }

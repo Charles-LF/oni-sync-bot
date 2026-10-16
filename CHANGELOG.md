@@ -15,9 +15,47 @@
 
 ### Fixed
 
-- `src/plugins/queryCommands.ts` 修复模糊匹配算法：新增公共前缀匹配评分，解决相近词条无法返回到待选列表的问题
+### Removed
+
+---
+
+## [0.10.0] — 2026-10-16
+
+大规模可维护性重构：消除模块级可变单例、按职责拆分上帝类、统一重试与配置声明、补齐单元测试，并修正查询打分的空串缺陷。
+
+### Added
+
+- 建立单元测试体系（`tests/`，`yarn test` = tsc 进程内编译 + mocha 单进程加载，不依赖 esbuild），共 74 个用例覆盖纯函数、匹配算法、依赖注入与配置 schema
+- `src/utils/matcher.ts` — 从 `queryCommands.ts` 抽出的纯匹配/打分逻辑
+- `src/utils/async.ts` — 统一的 `sleep` 与 `withRetry`
+- `src/services/messageRenderer.ts` — QQ markdown/按钮 与 纯文本的平台差异渲染
+- `src/services/syncNotifier.ts` — 从 `syncCommands.ts` 抽出的同步结果群通知
+- `src/config.ts` — 配置的唯一声明处（账号 / 站点 / 通知 / 定时 四个分组）
+- `WikiBotService.ensureReady()` — 机器人就绪检查回到服务层
+- `src/sync/` 新增 `ModuleSyncer` / `ImageSyncer` / `PageSyncer` 三个类
+
+### Changed
+
+- `src/index.ts` — 子插件改为 `SUB_PLUGINS` 注册表，新增子插件只需加一行；配置类型通过 `Pick` / `extends` 从共享分组派生
+- `src/sync/*` — 模块级 `CONFIG` 单例改为构造注入的 options；三个同步器的构造签名统一为 `(source, target, deps?)`
+- `WikiBotService` — `ggbot` / `bwikibot` 收为 private（编译期禁止外部穿透），`isReady` 由手工同步的字段改为派生 getter
+- 重试逻辑由三套实现统一为 `withRetry`，失败时抛出原始错误本身
+- `src/services/consoleLogProvider.ts` — 日志缓冲由模块级变量改为实例状态
+- TypeScript 开启 `strictNullChecks`，全仓库 `--strict` 亦通过
+- 全仓库消除 `any`（21 处 → 1 处），仅保留 MediaWiki 响应边界的必要断言
+
+### Fixed
+
+- `src/utils/matcher.ts` — 空查询串不再产生匹配信号。此前纯拉丁查询（`Refinery` 的拼音首字母为空串）会让**每个页面白得 6 分**、全符号查询（全拼与首字母均为空）会让**每页白得 23 分**，导致「没有匹配」反而返回若干随机页面
+- `src/utils/tools.ts` — `formatWikiTime()` 混用本地时区与 UTC 取值，仅在 UTC+8 机器上碰巧正确；改为时区无关实现，并由 `Date` 正确处理 +8 造成的跨日/跨月/跨年进位
+- `src/plugins/queryCommands.ts` — 模糊匹配算法新增公共前缀匹配评分，解决相近词条无法返回待选列表的问题（0.9.3 开发中的修复，随本次发布）
 
 ### Removed
+
+- 删除 8 个子插件文件里无人调用的 `export function apply`（组合根是 `src/index.ts`）
+- 删除 `imgSync.ts` 中被导出但全仓库无引用的 `CONFIG`
+- 删除 `imgSync.ts` / `pageSync.ts` 中从未被读取的 `config: Config` 死参数链
+- 删除各子插件重复的配置声明（`domain` 曾声明 3 次，`main_site` / `bwiki_site` / `logsUrl` 各 2 次，4 个账号字段各 2 次，共 9 处重复），`Schema.object` 现在只出现在 `config.ts`
 
 ---
 

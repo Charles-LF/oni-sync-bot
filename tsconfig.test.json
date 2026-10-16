@@ -1,0 +1,23 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "composite": false,
+    "incremental": false,
+    "declaration": false,
+    "emitDeclarationOnly": false,
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "rootDir": ".",
+    "outDir": ".test-build",
+    "types": [
+      "node",
+      "mocha",
+      "yml-register/types"
+    ],
+    "strictNullChecks": true
+  },
+  "include": [
+    "src",
+    "tests"
+  ]
+}
