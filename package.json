@@ -1,7 +1,7 @@
 {
   "name": "koishi-plugin-oni-sync-bot",
   "description": "缺氧 Wiki 镜像同步 · 拼音查询 · 本地向量 AI 问答",
-  "version": "0.11.0",
+  "version": "0.11.1",
   "main": "lib/index.js",
   "typings": "lib/index.d.ts",
   "files": [
