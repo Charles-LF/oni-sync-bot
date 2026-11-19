@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
 import {
   AccountConfig,
+  AiConfig,
   NotifyConfig,
   ScheduleConfig,
   SiteConfig,
+  VectorConfig,
+  WikiTextConfig,
 } from "../src/config";
 
 /**
@@ -20,6 +23,9 @@ const GROUPS = {
   SiteConfig,
   NotifyConfig,
   ScheduleConfig,
+  WikiTextConfig,
+  VectorConfig,
+  AiConfig,
 };
 
 describe("插件配置 schema", () => {
@@ -65,6 +71,39 @@ describe("插件配置 schema", () => {
       "notifyBotPlatform",
       // 定时任务
       "updateCron",
+      // 渲染文本
+      "textSyncOnChange",
+      "textApiUrl",
+      "textTableMode",
+      "textMaxLength",
+      "textSyncInterval",
+      // 向量检索
+      "vectorEnabled",
+      "vectorIndexPath",
+      "embeddingModel",
+      "embeddingDtype",
+      "embeddingCacheDir",
+      "embeddingRemoteHost",
+      "chunkSize",
+      "chunkOverlap",
+      "maxChunksPerPage",
+      "retrieveTopK",
+      "retrieveMinScore",
+      "queryInstruction",
+      "embedBatchSize",
+      // AI 问答
+      "aiEnabled",
+      "deepseekApiKey",
+      "deepseekBaseUrl",
+      "deepseekModel",
+      "aiTemperature",
+      "aiMaxTokens",
+      "aiTimeout",
+      "aiCooldown",
+      "aiMaxQuestionLength",
+      "aiMemoryTurns",
+      "aiMemoryTtl",
+      "aiChannelMemory",
     ];
 
     const missing = expected.filter((key) => !all.has(key));

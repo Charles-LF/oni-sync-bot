@@ -1,7 +1,7 @@
 {
   "name": "koishi-plugin-oni-sync-bot",
-  "description": "缺氧Wiki站镜像点同步-测试",
-  "version": "0.10.1",
+  "description": "缺氧 Wiki 镜像同步 · 拼音查询 · 本地向量 AI 问答",
+  "version": "0.11.0",
   "main": "lib/index.js",
   "typings": "lib/index.d.ts",
   "files": [
@@ -18,7 +18,7 @@
     "test": "tsc -p tsconfig.test.json && mocha --recursive .test-build/tests"
   },
   "koishi": {
-    "description": "缺氧Wiki站镜像点同步-测试",
+    "description": "缺氧 Wiki 镜像同步 · 拼音查询 · 本地向量 AI 问答",
     "service": {
       "required": [],
       "optional": []
@@ -35,11 +35,14 @@
     "koishi": "^4.18.11"
   },
   "dependencies": {
+    "@huggingface/transformers": "^4.3.2",
     "@types/node-fetch": "^2.6.13",
+    "cheerio": "^1.2.0",
     "form-data": "^4.0.6",
     "koishi-plugin-cron": "^3.1.0",
     "mwn": "^3.0.3",
     "node-fetch": "^3.3.2",
-    "pinyin-pro": "^3.29.5"
+    "pinyin-pro": "^3.29.5",
+    "vectra": "^0.15.0"
   }
 }

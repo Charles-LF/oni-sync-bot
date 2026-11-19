@@ -2,6 +2,7 @@ import { Context } from "koishi";
 import { resolve } from "path";
 import { Config } from "./config";
 import { WikiBotService } from "./services/wikiBotService";
+import { VectorService } from "./services/vectorService";
 import { ConsoleLogProvider } from "./services/consoleLogProvider";
 import { DatabaseExtension } from "./plugins/databaseExtension";
 import { RouteRedirect } from "./plugins/routeRedirect";
@@ -9,6 +10,7 @@ import { SyncCommands } from "./plugins/syncCommands";
 import { QueryCommands } from "./plugins/queryCommands";
 import { UpdateCommands } from "./plugins/updateCommands";
 import { TodoList } from "./plugins/todoList";
+import { AiQueryCommands } from "./plugins/aiQueryCommands";
 
 export { Config };
 
@@ -17,8 +19,8 @@ export const name = "oni-sync-bot";
 /**
  * 子插件注册表。
  *
- * **顺序即依赖顺序**：`WikiBotService` 必须最先注册，因为它提供的 `wikiBot`
- * 服务被后面的子插件 `inject`。
+ * **顺序即依赖顺序**：`WikiBotService` 提供 `wikiBot`、`VectorService` 提供 `vector`，
+ * 二者都被后面的子插件 `inject`，因此必须排在前面。
  *
  * ## 如何新增一个子插件
  *
@@ -32,6 +34,7 @@ export const name = "oni-sync-bot";
  */
 const SUB_PLUGINS = [
   WikiBotService,
+  VectorService,
   ConsoleLogProvider,
   DatabaseExtension,
   RouteRedirect,
@@ -39,6 +42,7 @@ const SUB_PLUGINS = [
   QueryCommands,
   UpdateCommands,
   TodoList,
+  AiQueryCommands,
 ] as const;
 
 export function apply(ctx: Context, config: Config) {

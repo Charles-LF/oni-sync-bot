@@ -57,7 +57,13 @@ export interface OniTodoItem {
 }
 
 export class TodoList {
-  public static readonly inject = ["database", "console", "wikiBot", "cron"];
+  /** `cron` 可选：未启用定时任务插件时，TodoList 的命令与控制台仍需可用 */
+  public static readonly inject = {
+    database: { required: true },
+    console: { required: true },
+    wikiBot: { required: true },
+    cron: { required: false },
+  };
   public log: Logger;
 
   constructor(public ctx: Context) {
@@ -86,6 +92,13 @@ export class TodoList {
   }
 
   private registerCronJobs(ctx: Context) {
+    if (typeof ctx.cron !== "function") {
+      this.log.warn(
+        "未检测到 cron 服务（koishi.yml 未启用 koishi-plugin-cron），TodoList 的定时任务已跳过",
+      );
+      return;
+    }
+
     ctx.cron("0 0 * * 1", async () => {
       if (!this.ctx.wikiBot.isReady) {
         this.log.warn("定时任务：WikiBot 服务未就绪，跳过同步模块");

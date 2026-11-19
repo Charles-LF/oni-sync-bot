@@ -8,7 +8,12 @@ export interface UpdateCommandsConfig
   extends Pick<NotifyConfig, "logsUrl">, ScheduleConfig {}
 
 export class UpdateCommands {
-  public static readonly inject = ["database", "wikiBot", "cron"];
+  /** `cron` 可选：定时刷新缓存是增强项，命令本身必须始终可用 */
+  public static readonly inject = {
+    database: { required: true },
+    wikiBot: { required: true },
+    cron: { required: false },
+  };
   public config: UpdateCommandsConfig;
   public log: Logger;
 
@@ -23,6 +28,13 @@ export class UpdateCommands {
   }
 
   private registerCronJobs(ctx: Context) {
+    if (typeof ctx.cron !== "function") {
+      this.log.warn(
+        "未检测到 cron 服务（koishi.yml 未启用 koishi-plugin-cron），页面缓存的定时更新已跳过",
+      );
+      return;
+    }
+
     const cronExpression: string = this.config.updateCron || "0 2 * * *";
     ctx.cron(cronExpression, async () => {
       if (!this.ctx.wikiBot.isReady) {

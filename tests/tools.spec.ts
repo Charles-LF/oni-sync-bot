@@ -7,6 +7,7 @@ import {
   truncateComment,
   normalizeImageTitle,
   stripImagePrefix,
+  siteUrl,
 } from "../src/utils/tools";
 
 describe("utils/tools", () => {
@@ -96,6 +97,25 @@ describe("utils/tools", () => {
 
     it("无法解析时原样返回", () => {
       assert.equal(formatWikiTime("not-a-date"), "not-a-date");
+    });
+  });
+
+  describe("siteUrl", () => {
+    it("补全协议", () => {
+      assert.equal(siteUrl("wiki.biligame.com/oni"), "https://wiki.biligame.com/oni");
+    });
+
+    it("已有的 http(s) 协议保持不变", () => {
+      assert.equal(siteUrl("http://a.com/x"), "http://a.com/x");
+      assert.equal(siteUrl("HTTPS://a.com/x"), "HTTPS://a.com/x");
+    });
+
+    it("去掉结尾斜杠与首尾空白", () => {
+      assert.equal(siteUrl("  wiki.biligame.com/oni/  "), "https://wiki.biligame.com/oni");
+    });
+
+    it("空串返回空串", () => {
+      assert.equal(siteUrl(""), "");
     });
   });
 

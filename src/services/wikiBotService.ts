@@ -254,3 +254,19 @@ export class WikiBotService extends Service {
 
 /** 账号配置来自共享分组，键名与默认值见 src/config.ts */
 export type WikiBotServiceConfig = AccountConfig;
+
+/**
+ * bwiki 客户端的「就绪版」获取：未登录时返回 `undefined` 而不是抛错。
+ *
+ * 供把 bwiki 当作**可选**依赖的子插件使用（例如抓取 `action=parse` 渲染文本）。
+ * 调用方需要在 `inject` 中声明 `wikiBot`，否则访问 `ctx.wikiBot` 会触发 cordis 警告。
+ */
+export function tryGetBWikiBot(ctx: Context): Mwn | undefined {
+  try {
+    const service = ctx.wikiBot as WikiBotService | undefined;
+    if (!service || !service.isBWikiBotReady()) return undefined;
+    return service.getBWikiBot();
+  } catch {
+    return undefined;
+  }
+}

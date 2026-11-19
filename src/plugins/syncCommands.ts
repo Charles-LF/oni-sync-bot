@@ -1,24 +1,50 @@
 import { Context } from "koishi";
-import type { NotifyConfig } from "../config";
+import type { NotifyConfig, SiteConfig, VectorConfig, WikiTextConfig } from "../config";
 import { sleep } from "../utils/async";
 import { Mwn } from "mwn";
 import {} from "koishi-plugin-cron";
 import { PageSyncer, SyncNotifyItem } from "../sync/pageSync";
 import { ModuleSyncer } from "../sync/moduleSync";
 import { ImageSyncer } from "../sync/imgSync";
+import { RenderedTextSyncer } from "../sync/textSync";
 import { SyncNotifier } from "../services/syncNotifier";
-import { logger, formatWikiTime } from "../utils/tools";
+import { tryGetBWikiBot } from "../services/wikiBotService";
+import { logger, formatWikiTime, siteUrl } from "../utils/tools";
 
 /**
- * 实际只消费日志地址与通知字段；账号与站点配置由其它子插件使用，
- * 因此这里不再重复声明（详见 src/config.ts）。
+ * 实际只消费日志地址 / 通知字段 / 站点域名 / 渲染文本与向量相关开关；
+ * 账号配置由 WikiBotService 使用，因此这里不再重复声明（详见 src/config.ts）。
  */
-export type SyncCommandsConfig = NotifyConfig;
+export type SyncCommandsConfig = NotifyConfig &
+  Pick<SiteConfig, "bwiki_site"> &
+  Pick<VectorConfig, "vectorEnabled"> &
+  Pick<
+    WikiTextConfig,
+    | "textSyncOnChange"
+    | "textApiUrl"
+    | "textTableMode"
+    | "textMaxLength"
+    | "textSyncInterval"
+  >;
 
 export class SyncCommands {
-  public static readonly inject = ["wikiBot", "database", "cron"];
+  /**
+   * `cron` / `http` / `vector` 都是**可选**依赖：
+   * 任何一项没装，同步命令仍必须可用（只是少了定时任务 / 渲染文本抽取）。
+   * 早期把它们写成必需项，曾在实例未启用 koishi-plugin-cron 时导致
+   * 整个子插件一直 pending，`sync` 系列命令凭空消失。
+   */
+  public static readonly inject = {
+    wikiBot: { required: true },
+    database: { required: true },
+    cron: { required: false },
+    http: { required: false },
+    vector: { required: false },
+  };
   public config: SyncCommandsConfig;
   private notifyFn?: (items: SyncNotifyItem[]) => void;
+  /** 同步成功后抽取渲染文本（未开启时为空） */
+  private textSync?: RenderedTextSyncer;
 
   constructor(ctx: Context, config: SyncCommandsConfig) {
     this.config = config;
@@ -33,25 +59,71 @@ export class SyncCommands {
       ? (items) => void notifier.notify(items)
       : undefined;
 
+    this.textSync = this.createTextSyncer(ctx);
+
     this.registerScheduledTasks(ctx);
     this.registerCommands(ctx);
   }
 
+  /**
+   * 构造「渲染文本同步器」：页面同步成功后再回 bwiki 取一次渲染结果。
+   * `textSyncOnChange` 关闭时不创建（同步后不做任何额外请求）。
+   */
+  private createTextSyncer(ctx: Context): RenderedTextSyncer | undefined {
+    const config = this.config;
+    if (!config.textSyncOnChange) return undefined;
+
+    const bwiki = siteUrl(config.bwiki_site || "wiki.biligame.com/oni");
+    return new RenderedTextSyncer({
+      http: ctx.http,
+      // 惰性取用已登录的 bwiki 客户端：构造时登录通常还没完成
+      bot: () => tryGetBWikiBot(ctx),
+      database: ctx.database,
+      vector: config.vectorEnabled ? ctx.vector : undefined,
+      options: {
+        apiUrl: config.textApiUrl || `${bwiki}/api.php`,
+        pageUrlBase: `${bwiki}/`,
+        tableMode: config.textTableMode,
+        maxLength: config.textMaxLength,
+        interval: config.textSyncInterval,
+      },
+    });
+  }
+
+  /** 统一的 PageSyncer 构造：数据库、通知与「同步后抽取文本」钩子都在这里装配 */
+  private createPageSyncer(ctx: Context): PageSyncer {
+    return new PageSyncer(ctx.wikiBot.getGGBot(), ctx.wikiBot.getBWikiBot(), {
+      database: ctx.database,
+      notify: this.notifyFn,
+      onSynced: this.textSync
+        ? async (title) => {
+            // 只在主命名空间上抽取正文：Module:/File: 等页面渲染结果没有检索价值
+            if (title.includes(":")) return;
+            await this.textSync?.syncOne(title);
+          }
+        : undefined,
+    });
+  }
+
   /** 同步相关的定时任务；cron 表达式即调度策略，集中在一处便于对照 */
   private registerScheduledTasks(ctx: Context) {
+    if (typeof ctx.cron !== "function") {
+      logger.warn(
+        "未检测到 cron 服务（koishi.yml 未启用 koishi-plugin-cron），定时同步任务已跳过；手动命令不受影响",
+      );
+      return;
+    }
+
     ctx.cron("15 * * * *", async () => {
       if (!(await this.ensureBotsReady(ctx, "增量更新"))) return;
 
-      await new PageSyncer(ctx.wikiBot.getGGBot(), ctx.wikiBot.getBWikiBot(), {
-        database: ctx.database,
-        notify: this.notifyFn,
-      }).incrementalUpdate();
+      await this.createPageSyncer(ctx).incrementalUpdate();
     });
 
     ctx.cron("30 8 * * 4", async () => {
       if (!(await this.ensureBotsReady(ctx, "同步所有页面"))) return;
 
-      await new PageSyncer(ctx.wikiBot.getGGBot(), ctx.wikiBot.getBWikiBot())
+      await this.createPageSyncer(ctx)
         .syncAll()
         .then(() => {
           logger.info("自动任务：尝试同步所有页面，从 WIKIGG 到 bwiki");
@@ -108,10 +180,7 @@ export class SyncCommands {
           return "❌ Wiki 机器人未就绪，请检查登录配置或查看日志";
         }
         try {
-          await new PageSyncer(
-            ctx.wikiBot.getGGBot(),
-            ctx.wikiBot.getBWikiBot(),
-          ).syncOne(pageTitle, "sync-bot");
+          await this.createPageSyncer(ctx).syncOne(pageTitle, "sync-bot");
           return `✅ 已尝试同步页面：${pageTitle}，请前往控制台查看：${this.config.logsUrl}`;
         } catch (err) {
           logger.error(`同步页面 ${pageTitle} 失败，错误信息：${err}`);
@@ -129,11 +198,7 @@ export class SyncCommands {
           return "❌ Wiki 机器人未就绪，请检查登录配置或查看日志";
         }
         try {
-          await new PageSyncer(
-            ctx.wikiBot.getGGBot(),
-            ctx.wikiBot.getBWikiBot(),
-            { notify: this.notifyFn },
-          ).incrementalUpdate();
+          await this.createPageSyncer(ctx).incrementalUpdate();
           return `✅ 已尝试获取三小时前的编辑并同步，请前往控制台查看：${this.config.logsUrl}`;
         } catch (err) {
           logger.error(`增量更新失败，错误信息：${err}`);
@@ -148,10 +213,7 @@ export class SyncCommands {
           return "❌ Wiki 机器人未就绪，请检查登录配置或查看日志";
         }
         try {
-          await new PageSyncer(
-            ctx.wikiBot.getGGBot(),
-            ctx.wikiBot.getBWikiBot(),
-          ).syncAll();
+          await this.createPageSyncer(ctx).syncAll();
           return `✅ 已尝试同步所有页面，请前往控制台查看：${this.config.logsUrl}`;
         } catch (err) {
           logger.error(`同步所有页面失败，错误信息：${err}`);

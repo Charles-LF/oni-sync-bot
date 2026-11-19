@@ -19,6 +19,68 @@
 
 ---
 
+## [0.11.0] — 2026-11-20
+
+### Added
+
+- 新增 `.ai` 问答：BWiki `action=parse` 渲染文本 → `wikitexts` 表 → 本地向量检索（vectra + transformers.js `bge-small-zh`）→ DeepSeek 总结，回复末尾标注「数据来源：缺氧 BWIKI」
+- `src/services/vectorService.ts` — `ctx.vector` 服务：文本切块、本地 Embedding、vectra 索引读写
+- `src/services/aiService.ts` — DeepSeek 客户端与防幻觉提示词组装
+- `src/services/aiMemory.ts` — 短期记忆（用户 / 群话题）与 `pickContext` 选择逻辑（纯函数）
+- `src/sync/textSync.ts` — `RenderedTextSyncer`：抓取渲染文本并落库（sha1 去重）
+- `src/utils/renderText.ts` — HTML → 纯文本、文本切块的纯函数
+- `src/plugins/aiQueryCommands.ts` — `ai` / `ai.status` / `ai.sync` / `ai.reindex`
+- `PageSyncer` 新增可选 `onSynced` 钩子：页面同步成功后自动抽取渲染文本
+- 新增 `wikitexts` 表（主键为页面标题）与「渲染文本 / 向量 / AI」三组配置
+- `.ai` 短期记忆：按「平台 + 频道 + 用户」保留最近 2 轮（`aiMemoryTurns` / `aiMemoryTtl`），
+  追问时把上一轮问题并入检索串，检索为空时复用上一轮资料
+- `.ai` 群内话题承接（`aiChannelMemory`）：自己没有提问记录时使用群里上一轮问答的语境，
+  回复中标注「💭 承接群内上一问」，回答「未提及」的轮次不会成为群话题
+- 追问记忆**落库**（`oniaimemory` 表）：Koishi 重启 / 热重载后仍能承接上一问，过期行自动清理
+- `ai.status` 增加「索引体积」「群内追问」与低配内存提示
+
+### Changed
+
+- `SyncCommands` 的 `PageSyncer` 统一由 `createPageSyncer()` 构造，集中装配数据库、通知与 `onSynced`
+- `ai.sync` 不再依赖本地页面缓存：`wikipages` 为空时自动用 bwiki `list=allpages` 枚举
+- 抓取渲染文本优先走已登录的 bwiki 客户端（惰性获取，登录完成后自动接管），`ctx.http` 兜底时自动补 `Referer`
+- `maxChunksPerPage` 默认值 24 → 16（索引常驻内存约每块 6~7 KB，2G 机器建议 12）
+- `retrieveTopK` 默认值 3 → 5：信息框里的数值块通常排在第 4 位，取 3 块会正好漏掉
+- 取消「同一页面最多取 2 块」的限制：数值题常常需要同页多个片段，去重反而漏召回
+- 切块改为按信息框分组标题（`[效果]` / `[建造]`…）优先断块，让「电力：消耗 120 瓦」独立成块
+- 追问时会**钉住话题页的第 0 块**（信息框/简介），不再单纯依赖相似度排名召回关键数值
+- **话题页补全**（回答不再只覆盖页面开头）：
+  - 话题页的判定顺序改为「问题里点名的页面 → 上一轮记忆 → 命中里过半来自同一页」，
+    「氧石精炼炉怎么用」这种问法不再被拆到氧石、铁、绿叶小行星几页上；
+  - 点名页面或宽泛问题时把该页**整页**交给模型（预算 5000 字 / 12 块）：「电解器能干哈」
+    的上下文从 5 块 1.3k 字增加到 12 块 3.1k 字，自动化、技巧、版本历史都进得去；
+  - 追问仍只补该页最相关的 3 块（上限 `retrieveTopK + 2`），保持聚焦
+- 新增依赖：`vectra`、`cheerio`、`@huggingface/transformers`；`koishi-plugin-cron` 改为软依赖
+  （`vectra@0.15` 声明 `engines: node >= 22`，运行环境建议 Node 22+）
+
+### Fixed
+
+- **信息框被当噪音删掉，导致耗电 / 产热 / 尺寸 / 材料等关键数值完全没有进检索**：
+  `extractPlainText` 现在把 `table.infobox` 抽成「标签：值」文本行（含 `infobox-group` 分组卡片），
+  只丢弃导航框、目录、折叠按钮与「不同材料」变体表
+- 文本切块的重叠区改为从行首开始，避免把半个词带进下一块
+- **`sync` / `update` / `todolist` 命令在未启用 `koishi-plugin-cron` 的实例里整组消失**：
+  `cron` 改为可选依赖（`inject: { cron: { required: false } }`），缺省时只跳过定时任务并打警告
+- **`ai.sync` 大量失败（HTTP 567）**：bwiki 的 WAF 要求 `Referer`，补齐后恢复正常；
+  `missingtitle`（页面不存在）单独归类为 `missing`，不再计为失败
+- `allpages` 兜底忽略 `maxPages` 上限，可能一次抓 500+ 页
+- AI 回答「未提及」时不再列出无关的检索来源，避免误导
+- **信息框数值明明存在却回答「未提及」**：信息框块被混在 287 字的大块里、且排在检索第 4 位，
+  叠加「每页最多 2 块 + 只取 3 块」后被裁掉；现已按分组断块并放宽召回
+- **重启后追问失去主语**（插件热重载 / 进程重启后「耗电多少」变回孤立问题）：记忆改为落库 + 话题块钉入上下文
+- **旧版本同步过的页面正文偏短**（如 `氧石精炼炉` 只有 586 字、没有「效果/建造」数值）：
+  抽取器升级后 `hash` 会变化，执行一次 `ai.sync` 即可重新抽取并自动重建该页的向量块
+  （新版抽取结果 877 字，含 `电力：消耗 1200 瓦`、`建造时间：480 秒`）
+
+### Removed
+
+---
+
 ## [0.10.1] — 2026-10-16
 
 ### Fixed
@@ -158,7 +220,10 @@
 - 页面拼音查询与模糊搜索命令
 - 定时任务（基于 `koishi-plugin-cron`）
 
-[Unreleased]: https://github.com/Charles-lf/oni-sync-bot/compare/v0.9.2...HEAD
+[Unreleased]: https://github.com/Charles-lf/oni-sync-bot/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/Charles-lf/oni-sync-bot/releases/tag/v0.11.0
+[0.10.1]: https://github.com/Charles-lf/oni-sync-bot/releases/tag/v0.10.1
+[0.10.0]: https://github.com/Charles-lf/oni-sync-bot/releases/tag/v0.10.0
 [0.9.2]: https://github.com/Charles-lf/oni-sync-bot/releases/tag/v0.9.2
 [0.9.1]: https://github.com/Charles-lf/oni-sync-bot/releases/tag/v0.9.1
 [0.8.9]: https://github.com/Charles-lf/oni-sync-bot/releases/tag/v0.8.9

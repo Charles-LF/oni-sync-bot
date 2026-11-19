@@ -230,6 +230,18 @@ function stripImagePrefix(fileName: string): string {
   return trimmed;
 }
 
+/**
+ * 把配置里的站点域名规范成带协议的 URL。
+ * 允许配置成 `wiki.biligame.com/oni`、`https://wiki.biligame.com/oni/` 等写法。
+ * @param site 站点域名
+ * @returns 规范化后的 URL（空输入返回空串）
+ */
+function siteUrl(site: string): string {
+  const trimmed = (site ?? "").trim().replace(/\/+$/, "");
+  if (!trimmed) return "";
+  return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+}
+
 export {
   getAndProcessPageContent,
   generatePinyinInfo,
@@ -240,4 +252,5 @@ export {
   truncateComment,
   normalizeImageTitle,
   stripImagePrefix,
+  siteUrl,
 };
