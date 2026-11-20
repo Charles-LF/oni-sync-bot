@@ -1,10 +1,13 @@
 import { load } from "cheerio";
 
 /**
- * HTML → 纯文本 / 文本切块。
+ * HTML → 纯文本。
  *
  * 这里只放**纯函数**：不依赖 Koishi Context、不发请求，因此可以被单元测试直接覆盖
  * （见 tests/renderText.spec.ts）。
+ *
+ * 输入是 MediaWiki `action=parse&prop=text` 的渲染结果（模板、模块已展开），
+ * 由 `WikiBotService.fetchPagePlainText` 调用。
  *
  * 表格策略（针对 bwiki 的实际结构）：
  * - **信息框 `.infobox` 必须保留**：耗电、温度、尺寸、建筑血量这些数值只在信息框里，
@@ -62,19 +65,6 @@ const NOISE_TABLE_SELECTOR = [
 
 /** 视为一个内容块的标签，按文档顺序输出 */
 const BLOCK_SELECTOR = "h1,h2,h3,h4,h5,h6,p,li,dt,dd,blockquote,pre";
-
-/** 切块时优先在这些字符后断开（按优先级尝试） */
-const BOUNDARY_SEPARATORS = ["\n", "。", "！", "？", "；", "，"];
-
-/**
- * 分组标题行：信息框的 `[效果]` / `[建造]`，或整页标题 `【电解器】`。
- * 命中时若当前块已经有料，就先落块——否则「电力：消耗 120 瓦」会被
- * 建造/工作条件等无关行稀释，检索「耗电多少」时排不上来。
- */
-const GROUP_HEADER_PATTERN = /^(\[[^\]\n]{1,20}\]|【[^】\n]{1,30}】)/;
-
-/** 当前块至少有这么长，遇到分组标题才切分（避免产生一堆碎片块） */
-const GROUP_SPLIT_MIN = 120;
 
 /**
  * 把信息框抽成「标签：值」的文本行。
@@ -236,111 +226,6 @@ export function extractPlainText(
   return plain;
 }
 
-export interface TextChunk {
-  index: number;
-  text: string;
-}
-
-export interface ChunkOptions {
-  /** 目标块大小（字符数） */
-  size?: number;
-  /** 相邻块的重叠字符数 */
-  overlap?: number;
-  /** 最多产出多少块 */
-  maxChunks?: number;
-}
-
-/**
- * 按行切块：优先在段落/分组标题处断开，块与块之间保留少量重叠。
- *
- * 中文没有空格分词，按字符长度切比按 token 切更简单也更可控；
- * `bge-small-zh` 的输入上限是 512 token，默认 350 字符留有余量。
- *
- * 两条关键规则（直接影响检索命中率）：
- * 1. 遇到 `[效果]` / `【电解器】` 这类分组标题且当前块已有 ≥120 字时先落块，
- *    避免「电力：消耗 120 瓦」被建造、工作条件等无关行稀释；
- * 2. 重叠区从行首开始，避免把半个词带进下一块。
- */
-export function chunkText(text: string, options: ChunkOptions = {}): TextChunk[] {
-  const source = squash(text ?? "");
-  if (!source) return [];
-
-  const size = Math.max(80, Math.floor(options.size ?? 350));
-  const overlap = Math.max(
-    0,
-    Math.min(Math.floor(options.overlap ?? 60), Math.floor(size / 2)),
-  );
-  const maxChunks = Math.max(1, Math.floor(options.maxChunks ?? 24));
-
-  const chunks: TextChunk[] = [];
-  let current: string[] = [];
-  let currentLength = 0;
-
-  const flush = () => {
-    const value = current.join("\n").trim();
-    if (value) chunks.push({ index: chunks.length, text: value });
-    current = [];
-    currentLength = 0;
-  };
-
-  /** 上一块的尾部若干行，作为新块的重叠，从行首开始 */
-  const carryOverlap = (): string[] => {
-    if (overlap <= 0 || chunks.length === 0) return [];
-    const previous = chunks[chunks.length - 1].text;
-    const tail = previous.slice(-overlap);
-    const lineBreak = tail.indexOf("\n");
-    const piece = (lineBreak >= 0 ? tail.slice(lineBreak + 1) : tail).trim();
-    return piece ? piece.split("\n") : [];
-  };
-
-  for (const line of source.split("\n")) {
-    if (chunks.length >= maxChunks) break;
-
-    if (GROUP_HEADER_PATTERN.test(line) && currentLength >= GROUP_SPLIT_MIN) {
-      flush();
-    }
-
-    if (currentLength > 0 && currentLength + line.length + 1 > size) {
-      const carry = carryOverlap();
-      flush();
-      if (carry.length > 0) {
-        current = carry.slice();
-        currentLength = current.reduce((sum, item) => sum + item.length + 1, 0);
-      }
-    }
-
-    if (line.length > size) {
-      // 单行超长（例如没有标点的长句）：按自然断点强切
-      for (const piece of splitLongLine(line, size)) {
-        if (chunks.length >= maxChunks) break;
-        if (currentLength + piece.length + 1 > size) flush();
-        current.push(piece);
-        currentLength += piece.length + 1;
-      }
-      continue;
-    }
-
-    current.push(line);
-    currentLength += line.length + 1;
-  }
-
-  flush();
-  return chunks.slice(0, maxChunks);
-}
-
-/** 把超长单行按句读切成若干段 */
-function splitLongLine(line: string, size: number): string[] {
-  const pieces: string[] = [];
-  let rest = line;
-  while (rest.length > size) {
-    const cut = findBoundary(rest.slice(0, size), size);
-    pieces.push(rest.slice(0, cut).trim());
-    rest = rest.slice(cut).trim();
-  }
-  if (rest) pieces.push(rest);
-  return pieces.filter(Boolean);
-}
-
 /** 归一化空白：行内多空格压成一个，保留换行表达段落结构 */
 export function squash(text: string): string {
   return text
@@ -356,12 +241,3 @@ function squashInline(text: string): string {
   return text.replace(/[ \t\u3000]+/g, " ").trim();
 }
 
-/** 在切片后半段找一个自然断点；找不到就整段切开 */
-function findBoundary(slice: string, size: number): number {
-  const minimum = Math.floor(size / 2);
-  for (const separator of BOUNDARY_SEPARATORS) {
-    const at = slice.lastIndexOf(separator);
-    if (at >= minimum) return at + 1;
-  }
-  return slice.length;
-}

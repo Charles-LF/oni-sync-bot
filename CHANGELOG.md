@@ -19,6 +19,63 @@
 
 ---
 
+## [0.12.0] — 2026-11-20
+
+> **破坏性变更**：`.ai` 不再使用本地向量检索，改为 DeepSeek Function Calling + mwn 实时抓取正文。
+> 升级后需执行 `npm uninstall vectra @huggingface/transformers`，并删除 `data/oni-vector`、`data/oni-models`。
+
+### Added
+
+- `WikiBotService.fetchPagePlainText(title, { limit?, bypassCache? })`：复用已登录的 mwn 实例，
+  经 `parseTitle`（即 `action=parse&prop=text`）取**渲染后**的 HTML，再用 cheerio 抽成纯文本；
+  页面不存在（`missingtitle` 等）、未登录、网络失败统一返回 `null`，调用方无需 try/catch
+- 正文抽取默认截断 **3000 字**（`limit` 可覆盖），并按「小写标题」做 **10 分钟 / 最多 50 页** 的进程内缓存，
+  避免群聊里反复请求同一页触发 bwiki 的 WAF 限流
+- `WikiBotService.searchPageTitles(keyword, limit)`：`list=search` 全文检索，用于关键词→标题的第三级解析
+- `AiService.complete(messages, { tools, toolChoice })`：完整的 Function Calling 支持，
+  返回解析后的 `toolCalls` 与可原样回传的 assistant 消息
+- `ai` 命令改为 **Agent 工具调用**：`search_oni_bwiki(keyword)` → 本地匹配标题 → mwn 取正文 →
+  以 `role:'tool'` 回填 → 第二轮生成回答；日志记录 `[ai] Agent 决定检索: <title>`
+- 新增测试 `tests/aiAgent.spec.ts`（tool_call 配对、强制检索、追问兜底、上限跳过）与重写的 `tests/aiService.spec.ts`
+
+### Changed
+
+- 关键词→标题改为**三级解析**：`wikipages` 精确标题 → 拼音/首字母模糊匹配（分数门槛 8，纯首字母命中不可信）
+  → BWiki 全文检索 → 关键词原样当标题
+- 模型未发起工具调用时，用 `tool_choice: 'required'` **强制检索一次**，防止模型凭记忆作答
+  （该请求失败时会退回模型第 1 轮的回答，不会让整次问答报错）
+- 第 2 轮带 `tools` 但 `tool_choice: 'none'`：消息结构对所有 OpenAI 兼容层都合法，
+  同时明确禁止再次调工具；单次最多执行 2 个 `tool_call`，
+  超出的也必须补一条 `role:'tool'` 消息（否则下一次请求不合法）
+- 追问记忆 `MemoryTurn.chunks` 改为 `MemoryTurn.page`：记这一轮查了哪个页面，
+  关键词解析失败时可直接复用该页；旧 `oniaimemory` 行里的 `chunks` 字段运行时忽略
+- `ai.status` 改为展示「检索方式 / BWiki 客户端状态 / 本地页面缓存数」，不再报告索引体积
+- `.ai` 的日志改用 `ctx.logger("oni-ai")`
+
+### Fixed
+
+- 信息框数值仍然保留：清洗沿用 `extractPlainText` 的 `flatten` 策略（**不删 `<table>`**）。
+  实测 `电解器` 2637 字含 `电力：消耗 120 瓦` / `过热：75°C`，`氧石精炼炉` 939 字含
+  `电力：消耗 1200 瓦` / `建造时间：480 秒`；若按字面删掉全部表格，两页会掉到 2620 / 586 字且**不含任何数值**
+
+### Removed
+
+- 删除 `src/services/vectorService.ts`、`src/sync/textSync.ts` 及 `tests/textSync.spec.ts`
+- 删除命令 `ai.sync`、`ai.reindex`
+- 删除 `PageSyncer.onSynced` 钩子与 `SyncCommands` 里的渲染文本同步接线（唯一消费者已移除）
+- 删除 `utils/renderText.ts` 的 `chunkText` / `splitLongLine`（只被向量库使用）
+- 删除 `wikitexts` 表声明与 `tryGetBWikiBot` 辅助函数（旧表数据留在库里，不再读写）
+- 依赖移除：`vectra`、`@huggingface/transformers`
+
+### Deprecated
+
+- 配置项 `vectorEnabled` / `vectorIndexPath` / `embedding*` / `chunkSize` / `chunkOverlap` /
+  `maxChunksPerPage` / `retrieveTopK` / `retrieveMinScore` / `queryInstruction` / `embedBatchSize`，
+  以及 `textSyncOnChange` / `textApiUrl` / `textTableMode` / `textMaxLength` / `textSyncInterval`
+  已不再读取，**保留键位**只是为了让旧 `koishi.yml` 不报错
+
+---
+
 ## [0.11.0] — 2026-11-20
 
 ### Added
@@ -220,7 +277,8 @@
 - 页面拼音查询与模糊搜索命令
 - 定时任务（基于 `koishi-plugin-cron`）
 
-[Unreleased]: https://github.com/Charles-lf/oni-sync-bot/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/Charles-lf/oni-sync-bot/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/Charles-lf/oni-sync-bot/releases/tag/v0.12.0
 [0.11.0]: https://github.com/Charles-lf/oni-sync-bot/releases/tag/v0.11.0
 [0.10.1]: https://github.com/Charles-lf/oni-sync-bot/releases/tag/v0.10.1
 [0.10.0]: https://github.com/Charles-lf/oni-sync-bot/releases/tag/v0.10.0

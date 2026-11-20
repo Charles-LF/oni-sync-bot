@@ -1,15 +1,15 @@
 import assert from "node:assert/strict";
 import { AiMemory, pickContext } from "../src/services/aiMemory";
 
-const CHUNKS = [{ title: "电解器", text: "耗电 120 瓦" }];
+const PAGE = "电解器";
 
 function turn(question: string) {
-  return { question, answer: `${question}的答案`, chunks: CHUNKS, at: 0 };
+  return { question, answer: `${question}的答案`, page: PAGE, at: 0 };
 }
 
 /** 模拟「从数据库读出来的历史」，带真实时间戳 */
 function storedTurn(question: string, at = Date.now()) {
-  return { question, answer: `${question}的答案`, chunks: CHUNKS, at };
+  return { question, answer: `${question}的答案`, page: PAGE, at };
 }
 
 describe("services/aiMemory", () => {
@@ -24,7 +24,7 @@ describe("services/aiMemory", () => {
       turns.map((item) => item.question),
       ["第二问", "第三问"],
     );
-    assert.equal(turns[1].chunks[0].title, "电解器");
+    assert.equal(turns[1].page, "电解器");
   });
 
   it("超过 TTL 的轮次被视为过期", () => {

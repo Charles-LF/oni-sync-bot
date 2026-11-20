@@ -3,6 +3,7 @@ import type { AccountConfig } from "../config";
 import { Mwn } from "mwn";
 import { logger, getErrorMessage } from "../utils/tools";
 import { withRetry } from "../utils/async";
+import { extractPlainText } from "../utils/renderText";
 import { createReloginAwareProxy } from "./reloginAwareProxy";
 
 declare module "koishi" {
@@ -36,6 +37,18 @@ export class WikiBotService extends Service {
   private static readonly USER_AGENT = `OniSyncBot/1.0 (https://klei.vip; Charles@klei.vip)`;
   private static readonly MAX_RETRIES = 3;
   private static readonly RETRY_DELAY = 5000;
+
+  /** 取给 AI 的正文时默认截断到这么多字（提示词不需要整页，电解器整页也才 3000 字） */
+  private static readonly PAGE_TEXT_LIMIT = 3000;
+  /** 正文缓存 TTL：群里反复问同一页时不必重复请求 bwiki（WAF 会限流） */
+  private static readonly PAGE_TEXT_TTL = 10 * 60 * 1000;
+  private static readonly PAGE_TEXT_CACHE_SIZE = 50;
+
+  /** `小写标题 → 正文`，只缓存抽好的纯文本（约 3 KB/页，50 页 ≈ 150 KB） */
+  private readonly pageTextCache = new Map<
+    string,
+    { text: string; at: number }
+  >();
 
   constructor(ctx: Context, config: WikiBotServiceConfig) {
     super(ctx, "wikiBot", true);
@@ -150,6 +163,7 @@ export class WikiBotService extends Service {
     this.ggbot = null;
     this.bwikibot = null;
     this.botProxies = { gg: null, bwiki: null };
+    this.pageTextCache.clear();
   }
 
   async relogin(): Promise<{ gg: boolean; bwiki: boolean }> {
@@ -237,6 +251,112 @@ export class WikiBotService extends Service {
     return this.getBot("bwiki");
   }
 
+  // ------------------------------------------------------- 渲染文本（供 AI 使用）
+
+  /**
+   * 取某个页面的**渲染后纯文本**（模板、模块已展开，不是 wikitext 源码）。
+   *
+   * 为什么用 `parseTitle`：它就是 `action=parse&page=…&prop=text` 的封装
+   * （见 mwn `build/bot.js`），返回 `parse.text` 即渲染后的 HTML；并且调用会经过
+   * `createReloginAwareProxy`，登录态过期时自动重登并重放，不需要调用方关心。
+   *
+   * 清洗**不删 `<table>`**：bwiki 的信息框本身就是 `table.infobox`，耗电、产热、尺寸、
+   * 建筑材料全在里面。实测「氧石精炼炉」删表后只剩 586 字且无任何数值，保留信息框
+   * 则有 877 字并含 `电力：消耗 1200 瓦`。因此统一交给 `extractPlainText`：
+   * 信息框抽成「标签：值」、正文表格压平、只丢 navbox / 目录 / 脚本等噪音。
+   *
+   * 页面不存在、bwiki 未登录、网络失败都返回 `null`——调用方只判断 null，不需要 try/catch。
+   */
+  async fetchPagePlainText(
+    title: string,
+    options: { limit?: number; bypassCache?: boolean } = {},
+  ): Promise<string | null> {
+    const pageTitle = title.trim();
+    if (!pageTitle) return null;
+
+    const key = pageTitle.toLowerCase();
+    if (!options.bypassCache) {
+      const cached = this.pageTextCache.get(key);
+      if (cached && Date.now() - cached.at < WikiBotService.PAGE_TEXT_TTL) {
+        logger.debug(`[wikiBot] 命中正文缓存：${pageTitle}`);
+        return cached.text;
+      }
+    }
+
+    if (!this.isBWikiBotReady()) {
+      logger.warn(`[wikiBot] bwiki 未登录，无法获取「${pageTitle}」的正文`);
+      return null;
+    }
+
+    let html: string;
+    try {
+      html = await this.getBWikiBot().parseTitle(pageTitle, {
+        prop: "text",
+        redirects: true,
+        disableeditsection: true,
+        disabletoc: true,
+        disablelimitreport: true,
+      });
+    } catch (error) {
+      if (isMissingPageError(error)) {
+        logger.debug(`[wikiBot] 页面「${pageTitle}」不存在，跳过`);
+        return null;
+      }
+      logger.warn(
+        `[wikiBot] 获取「${pageTitle}」渲染 HTML 失败：${getErrorMessage(error)}`,
+      );
+      return null;
+    }
+
+    const text = extractPlainText(html, {
+      tableMode: "flatten",
+      maxLength: options.limit ?? WikiBotService.PAGE_TEXT_LIMIT,
+    });
+    if (!text) {
+      logger.warn(`[wikiBot] 「${pageTitle}」抽出的正文为空`);
+      return null;
+    }
+
+    this.cachePageText(key, text);
+    logger.debug(
+      `[wikiBot] 「${pageTitle}」正文 ${text.length} 字（HTML ${html.length} 字）`,
+    );
+    return text;
+  }
+
+  /**
+   * 用 MediaWiki 全文检索把关键词换成页面标题。
+   *
+   * 用于「高压制氧」「Electrolyzer」这类本地拼音匹配不上的叫法：
+   * AI 给的 keyword 未必是页面标题，先让 wiki 自己找一次，比直接 404 友好。
+   */
+  async searchPageTitles(keyword: string, limit = 1): Promise<string[]> {
+    const term = keyword.trim();
+    if (!term || !this.isBWikiBotReady()) return [];
+
+    try {
+      const results = await this.getBWikiBot().search(term, Math.max(1, limit));
+      return (results ?? [])
+        .map((item) => item?.title)
+        .filter((title): title is string => Boolean(title));
+    } catch (error) {
+      logger.debug(
+        `[wikiBot] 检索「${term}」失败：${getErrorMessage(error)}`,
+      );
+      return [];
+    }
+  }
+
+  private cachePageText(key: string, text: string): void {
+    // 先删再插：让 Map 的插入顺序等于「最近一次写入」，FIFO 淘汰才不会误伤热页
+    this.pageTextCache.delete(key);
+    if (this.pageTextCache.size >= WikiBotService.PAGE_TEXT_CACHE_SIZE) {
+      const oldest = this.pageTextCache.keys().next().value;
+      if (oldest !== undefined) this.pageTextCache.delete(oldest);
+    }
+    this.pageTextCache.set(key, { text, at: Date.now() });
+  }
+
   private getBot(site: WikiSite): Mwn {
     if (!this.botOf(site)) {
       throw new Error(
@@ -255,18 +375,15 @@ export class WikiBotService extends Service {
 /** 账号配置来自共享分组，键名与默认值见 src/config.ts */
 export type WikiBotServiceConfig = AccountConfig;
 
-/**
- * bwiki 客户端的「就绪版」获取：未登录时返回 `undefined` 而不是抛错。
- *
- * 供把 bwiki 当作**可选**依赖的子插件使用（例如抓取 `action=parse` 渲染文本）。
- * 调用方需要在 `inject` 中声明 `wikiBot`，否则访问 `ctx.wikiBot` 会触发 cordis 警告。
- */
-export function tryGetBWikiBot(ctx: Context): Mwn | undefined {
-  try {
-    const service = ctx.wikiBot as WikiBotService | undefined;
-    if (!service || !service.isBWikiBotReady()) return undefined;
-    return service.getBWikiBot();
-  } catch {
-    return undefined;
-  }
+/** 页面不存在时的 MediaWiki 错误码（`action=parse` 对缺失页面返回 missingtitle） */
+const MISSING_PAGE_CODES = new Set([
+  "missingtitle",
+  "invalidtitle",
+  "nosuchpageid",
+  "missingcontent",
+]);
+
+function isMissingPageError(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === "string" && MISSING_PAGE_CODES.has(code);
 }

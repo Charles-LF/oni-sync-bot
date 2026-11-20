@@ -82,13 +82,6 @@ export interface PageSyncerDependencies {
   database?: Database;
   /** 增量更新结束时一次性回调（仅包含 reason==="synced" 的条目） */
   notify?: (items: SyncNotifyItem[]) => void;
-  /**
-   * 单页同步成功（reason==="synced"）后的回调。
-   *
-   * 用于「同步完再抽取渲染文本 / 更新向量库」这类后续步骤；
-   * 回调抛错不会影响同步本身的成败。
-   */
-  onSynced?: (title: string) => void | Promise<void>;
   options?: Partial<PageSyncOptions>;
 }
 
@@ -102,7 +95,6 @@ export class PageSyncer {
   private readonly options: PageSyncOptions;
   private readonly database?: Database;
   private readonly notify?: (items: SyncNotifyItem[]) => void;
-  private readonly onSynced?: (title: string) => void | Promise<void>;
   private readonly images: ImageSyncer;
 
   constructor(
@@ -113,24 +105,10 @@ export class PageSyncer {
     this.options = { ...DEFAULT_OPTIONS, ...deps.options };
     this.database = deps.database;
     this.notify = deps.notify;
-    this.onSynced = deps.onSynced;
     this.images = new ImageSyncer(source, target);
   }
 
-  /** 同步成功后的后续处理；失败只记日志，绝不影响同步结果 */
-  private async runSyncedHook(title: string): Promise<void> {
-    if (!this.onSynced) return;
-    try {
-      await this.onSynced(title);
-    } catch (error) {
-      logger.warn(
-        `[syncSinglePage] 页面 ${title} 的同步后处理失败: ${getErrorMessage(error)}`,
-      );
-    }
-  }
-
   // ---------------------------------------------------------------- 数据库
-
   /** 带重试的数据库操作 */
   private retryDb<T>(fn: () => Promise<T>): Promise<T> {
     return withRetry(fn, {
@@ -229,7 +207,6 @@ export class PageSyncer {
         `由：${user} 触发更改，此时同步`,
       );
       logger.info(`[syncSinglePage] ✅ 页面 ${pageTitle} 同步成功`);
-      await this.runSyncedHook(pageTitle);
       return { success: true, reason: "synced" };
     } catch (error) {
       const errMsg = getErrorMessage(error);

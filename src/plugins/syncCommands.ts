@@ -1,36 +1,24 @@
 import { Context } from "koishi";
-import type { NotifyConfig, SiteConfig, VectorConfig, WikiTextConfig } from "../config";
+import type { NotifyConfig } from "../config";
 import { sleep } from "../utils/async";
 import { Mwn } from "mwn";
 import {} from "koishi-plugin-cron";
 import { PageSyncer, SyncNotifyItem } from "../sync/pageSync";
 import { ModuleSyncer } from "../sync/moduleSync";
 import { ImageSyncer } from "../sync/imgSync";
-import { RenderedTextSyncer } from "../sync/textSync";
 import { SyncNotifier } from "../services/syncNotifier";
-import { tryGetBWikiBot } from "../services/wikiBotService";
-import { logger, formatWikiTime, siteUrl } from "../utils/tools";
+import { logger, formatWikiTime } from "../utils/tools";
 
 /**
- * 实际只消费日志地址 / 通知字段 / 站点域名 / 渲染文本与向量相关开关；
+ * 实际只消费日志地址与通知字段；
  * 账号配置由 WikiBotService 使用，因此这里不再重复声明（详见 src/config.ts）。
  */
-export type SyncCommandsConfig = NotifyConfig &
-  Pick<SiteConfig, "bwiki_site"> &
-  Pick<VectorConfig, "vectorEnabled"> &
-  Pick<
-    WikiTextConfig,
-    | "textSyncOnChange"
-    | "textApiUrl"
-    | "textTableMode"
-    | "textMaxLength"
-    | "textSyncInterval"
-  >;
+export type SyncCommandsConfig = NotifyConfig;
 
 export class SyncCommands {
   /**
-   * `cron` / `http` / `vector` 都是**可选**依赖：
-   * 任何一项没装，同步命令仍必须可用（只是少了定时任务 / 渲染文本抽取）。
+   * `cron` / `http` 都是**可选**依赖：
+   * 任何一项没装，同步命令仍必须可用（只是少了定时任务）。
    * 早期把它们写成必需项，曾在实例未启用 koishi-plugin-cron 时导致
    * 整个子插件一直 pending，`sync` 系列命令凭空消失。
    */
@@ -39,12 +27,9 @@ export class SyncCommands {
     database: { required: true },
     cron: { required: false },
     http: { required: false },
-    vector: { required: false },
   };
   public config: SyncCommandsConfig;
   private notifyFn?: (items: SyncNotifyItem[]) => void;
-  /** 同步成功后抽取渲染文本（未开启时为空） */
-  private textSync?: RenderedTextSyncer;
 
   constructor(ctx: Context, config: SyncCommandsConfig) {
     this.config = config;
@@ -59,49 +44,15 @@ export class SyncCommands {
       ? (items) => void notifier.notify(items)
       : undefined;
 
-    this.textSync = this.createTextSyncer(ctx);
-
     this.registerScheduledTasks(ctx);
     this.registerCommands(ctx);
   }
 
-  /**
-   * 构造「渲染文本同步器」：页面同步成功后再回 bwiki 取一次渲染结果。
-   * `textSyncOnChange` 关闭时不创建（同步后不做任何额外请求）。
-   */
-  private createTextSyncer(ctx: Context): RenderedTextSyncer | undefined {
-    const config = this.config;
-    if (!config.textSyncOnChange) return undefined;
-
-    const bwiki = siteUrl(config.bwiki_site || "wiki.biligame.com/oni");
-    return new RenderedTextSyncer({
-      http: ctx.http,
-      // 惰性取用已登录的 bwiki 客户端：构造时登录通常还没完成
-      bot: () => tryGetBWikiBot(ctx),
-      database: ctx.database,
-      vector: config.vectorEnabled ? ctx.vector : undefined,
-      options: {
-        apiUrl: config.textApiUrl || `${bwiki}/api.php`,
-        pageUrlBase: `${bwiki}/`,
-        tableMode: config.textTableMode,
-        maxLength: config.textMaxLength,
-        interval: config.textSyncInterval,
-      },
-    });
-  }
-
-  /** 统一的 PageSyncer 构造：数据库、通知与「同步后抽取文本」钩子都在这里装配 */
+  /** 统一的 PageSyncer 构造：数据库与通知都在这里装配 */
   private createPageSyncer(ctx: Context): PageSyncer {
     return new PageSyncer(ctx.wikiBot.getGGBot(), ctx.wikiBot.getBWikiBot(), {
       database: ctx.database,
       notify: this.notifyFn,
-      onSynced: this.textSync
-        ? async (title) => {
-            // 只在主命名空间上抽取正文：Module:/File: 等页面渲染结果没有检索价值
-            if (title.includes(":")) return;
-            await this.textSync?.syncOne(title);
-          }
-        : undefined,
     });
   }
 

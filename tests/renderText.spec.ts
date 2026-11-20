@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import {
-  chunkText,
   extractPlainText,
   squash,
 } from "../src/utils/renderText";
@@ -91,86 +90,6 @@ describe("utils/renderText", () => {
     });
   });
 
-  describe("chunkText", () => {
-    it("空文本不产生块", () => {
-      assert.deepEqual(chunkText(""), []);
-      assert.deepEqual(chunkText("   \n  "), []);
-    });
-
-    it("短文本只产生一个块", () => {
-      const chunks = chunkText("电解器耗电 120 瓦。", { size: 200 });
-      assert.equal(chunks.length, 1);
-      assert.equal(chunks[0].index, 0);
-      assert.equal(chunks[0].text, "电解器耗电 120 瓦。");
-    });
-
-    it("长文本按自然断点切块，且不超过上限太多", () => {
-      const paragraph = "电解器把水分解成氧气和氢气，需要持续供电。".repeat(20);
-      const chunks = chunkText(paragraph, {
-        size: 100,
-        overlap: 20,
-        maxChunks: 50,
-      });
-      assert.ok(chunks.length > 1, "长文本应被切成多块");
-      for (const chunk of chunks) {
-        assert.ok(chunk.text.length <= 100, `块超长：${chunk.text.length}`);
-      }
-      assert.deepEqual(
-        chunks.map((chunk) => chunk.index),
-        chunks.map((_, index) => index),
-        "块序号应连续递增",
-      );
-    });
-
-    it("maxChunks 限制块数量", () => {
-      const long = "氧气".repeat(2000);
-      const chunks = chunkText(long, { size: 100, overlap: 10, maxChunks: 3 });
-      assert.equal(chunks.length, 3);
-    });
-
-    it("没有标点的长串也会被强制切开（不会死循环）", () => {
-      const chunks = chunkText("a".repeat(500), { size: 120, overlap: 10 });
-      assert.ok(chunks.length >= 4);
-      assert.ok(chunks.every((chunk) => chunk.text.length <= 120));
-    });
-
-    it("信息框分组标题处优先断块，数值不和建造项混在一起", () => {
-      const intro = "电解器把水分解为氧气和氢气，是基地最常用的制氧建筑之一。".repeat(3);
-      const text = [
-        "【电解器】",
-        intro,
-        "[效果]",
-        "电力：消耗 120 瓦",
-        "产热：1 千复制热/秒",
-        "[建造]",
-        "类别：氧气 > 生产",
-        "科技：空气系统",
-        "建造时间：30 秒",
-      ].join("\n");
-
-      const chunks = chunkText(text, { size: 350, overlap: 0, maxChunks: 8 });
-
-      assert.ok(chunks.length >= 2, `未按分组切块：${JSON.stringify(chunks)}`);
-      assert.ok(chunks[0].text.includes("【电解器】"));
-      assert.ok(chunks[0].text.includes("电力：消耗 120 瓦"), chunks[0].text);
-      assert.ok(!chunks[0].text.includes("[建造]"), "分组标题应成为新块起点");
-      assert.ok(chunks[1].text.startsWith("[建造]"), chunks[1].text);
-    });
-
-    it("分组标题不会把短块切碎（当前块不足 120 字时不切）", () => {
-      const text = [
-        "【电灯】",
-        "通电时提供光照。",
-        "[效果]",
-        "电力：消耗 8 瓦",
-        "[工作条件]",
-        "过热：75°C",
-      ].join("\n");
-
-      const chunks = chunkText(text, { size: 350, overlap: 0 });
-      assert.equal(chunks.length, 1, JSON.stringify(chunks));
-    });
-  });
 
   describe("squash", () => {
     it("压缩多空格并丢弃空行", () => {

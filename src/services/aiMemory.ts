@@ -1,24 +1,24 @@
-import type { AiContextChunk } from "./aiService";
-
-/** 一轮短期记忆：问题、回答，以及当轮用到的资料（供追问时复用） */
+/** 一轮短期记忆：问题、回答，以及当轮查过的页面（供追问时兜底复用） */
 export interface MemoryTurn {
   question: string;
   answer: string;
-  chunks: AiContextChunk[];
+  /** 这一轮实际检索到的页面标题；留空表示没查到（旧版本存的是 `chunks`，运行时忽略） */
+  page?: string;
   at: number;
 }
 
 /**
- * `.ai` 的短期记忆（纯内存，重启即清空）。
+ * `.ai` 的短期记忆（内存 Map，由调用方负责落库）。
  *
  * 为什么需要它：`ai 电解器耗电多少` 之后接一句「那它能干什么」，
- * 单轮检索拿不到主语，模型也无从知道「它」指谁。
+ * 模型看不到上一问就无从知道「它」指谁。
  *
  * 边界约定：
  * - `maxTurns <= 0` 表示关闭记忆；
  * - 每轮超过 `ttlMs` 视为新话题（默认 10 分钟），避免很早之前的问答污染当前问题；
- * - 每个键（平台:频道:用户）只保留最近 `maxTurns` 轮；
- * - 不做持久化——记忆只是对话顺畅度，不值得写库。
+ * - 每个键（平台:频道:用户 / topic:平台:频道）只保留最近 `maxTurns` 轮；
+ * - 本类**不直接读写数据库**：重启后的恢复由 `AiMemory.restore()` + 调用方的
+ *   `loadMemory()` 完成（`oniaimemory` 表），这样纯函数部分可以单测。
  */
 export class AiMemory {
   private readonly store = new Map<string, MemoryTurn[]>();
@@ -64,7 +64,7 @@ export class AiMemory {
   /** 追加一轮问答；超出上限时丢弃最旧的一轮 */
   add(
     key: string | undefined,
-    turn: { question: string; answer: string; chunks: AiContextChunk[] },
+    turn: { question: string; answer: string; page?: string },
   ): void {
     if (!key || !this.enabled) return;
 

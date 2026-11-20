@@ -27,20 +27,22 @@
 - **QQ 平台按钮** — QQ 会话下返回 markdown + 可点击按钮；其它平台返回纯文本
 - **序号选择** — 非 QQ 平台列出候选并要求 15 秒内回复序号
 
-### 🤖 AI 问答（本地向量检索 + DeepSeek）
+### 🤖 AI 问答（Function Calling + mwn 实时取正文）
 
-- **渲染文本抽取** — 同步成功后调用 BWiki `action=parse&prop=text` 取渲染结果，用 cheerio 清洗：
-  **信息框（右侧的关键数值）抽成 `电力：消耗 1200 瓦` 这样的「标签：值」行**，
-  正文数表压平为 `单元格 | 单元格`，导航框 / 目录 / 脚本 / 脚注标记才丢弃，结果写入 `wikitexts` 表
-- **本地向量库** — 纯 TS 的 [vectra](https://github.com/Stevenic/vectra) 文件索引，不引入任何数据库进程
-- **本地 Embedding** — `@huggingface/transformers` 在 CPU 上跑 `bge-small-zh-v1.5`（默认 q8 量化），不依赖外部 Embedding API
-- **防幻觉** — 检索片段进 system 提示词，模型被要求「严格且仅根据资料回答，资料未提及就直接说未提及」
-- **追问** — 自己最近 2 轮问答会被带进上下文；开启 `aiChannelMemory` 时，别人刚问过的题目也能承接（「那它耗电多少」）
-- **话题页补全** — 问题点名的页面（或命中集中的页面）会把整页交给模型，并始终带上信息框那一块，
-  回答不再只覆盖页面开头（详见 [AI 数据流](#ai-数据流)）
-- **降级检索** — 向量库不可用（未启用 / 还没建索引 / 模型加载失败）时，退化为既有的拼音标题匹配，再取该页正文
+- **Function Calling** — DeepSeek 拿到 `search_oni_bwiki(keyword)` 工具后**自己决定查什么**，
+  不再依赖本地语义检索；常规两轮模型调用
+- **复用已有 mwn 实例取正文** — `WikiBotService.fetchPagePlainText()` 走 `action=parse&prop=text`，
+  拿的是**模板/模块展开后**的 HTML，登录态失效会自动重登重放
+- **cheerio 清洗保留信息框** — 信息框（右侧关键数值）抽成 `电力：消耗 120 瓦` 这样的「标签：值」行，
+  正文数表压平为 `单元格 | 单元格`，只丢导航框 / 目录 / 脚本 / 脚注标记
+- **关键词三级解析** — `wikipages` 精确标题 → 拼音/首字母模糊匹配 → BWiki 全文检索，
+  最后才把关键词原样当标题试一次
+- **防幻觉** — 第 2 轮把正文以 `role:'tool'` 回填，提示词要求「严格且仅根据资料回答」
+- **强制检索** — 模型试图凭记忆作答时，程序会用 `tool_choice` 逼它再检索一次
+- **追问** — 自己最近 2 轮问答会被带进上下文；开启 `aiChannelMemory` 时，别人刚问过的题目也能承接
 
-> Wikitext 源码**只**用于同步，永远不会进入 AI 检索链路。AI 只看到渲染后的纯文本。
+> Wikitext 源码**只**用于同步，永远不会进入 AI 链路。AI 只看到渲染后的纯文本。
+> 正文按页缓存 10 分钟（最多 50 页），群里反复问同一页不会重复请求 bwiki。
 
 ### 📋 模块同步 TodoList
 
@@ -64,34 +66,23 @@ yarn add koishi-plugin-oni-sync-bot
 
 ### AI 相关依赖
 
-AI 问答功能依赖三个包（已随插件声明为 `dependencies`，正常安装即可）：
+AI 问答只需要 `cheerio`（解析 `action=parse` 的 HTML），已随插件声明为 `dependencies`：
 
 ```bash
-npm install vectra cheerio @huggingface/transformers
-# 或
-yarn add vectra cheerio @huggingface/transformers
+npm uninstall vectra @huggingface/transformers   # 0.12.0 起不再需要
 ```
 
-| 包 | 用途 | 体积说明 |
-| -- | ---- | -------- |
-| `vectra` | 本地文件向量索引 | 纯 JS，无独立进程 |
-| `cheerio` | 解析 `action=parse` 返回的 HTML | 纯 JS |
-| `@huggingface/transformers` | 本地 CPU 推理 Embedding 模型 | 含 onnxruntime，约 300MB 安装体积 |
-
-首次运行 `ai.sync` / `ai.reindex` 时会从 `embeddingRemoteHost`（默认 `https://hf-mirror.com`）下载模型，
-`bge-small-zh-v1.5` 的 q8 量化模型约 25MB，缓存在 `embeddingCacheDir`。
-
-> 运行环境：`vectra@0.15` 声明 `engines: node >= 22`，建议使用 **Node 22 / 24**（本仓库测试环境为 Node 26）。
-> 2 核 2G 的机器建议保持 `embeddingDtype="q8"`、`embedBatchSize=4`，Embedding 常驻内存约 100~200MB。
+> 从 0.11.x 升级时，这两个包（以及 `data/oni-vector`、`data/oni-models` 目录）
+> 都可以直接删掉：本地推理与向量索引已经移除，省下约 **180 MB 内存**与 **300 MB 安装体积**。
 
 ### 依赖服务
 
 插件需要以下 Koishi 插件（通常已随 Koishi 提供）：
 
-- `@koishijs/plugin-database`（`wikipages` / `wikitexts` / `onitodos` 持久化）
+- `@koishijs/plugin-database`（`wikipages` / `onitodos` / `oniaimemory` 持久化）
 - `@koishijs/plugin-server`（短链路由）
 - `@koishijs/plugin-console`（控制台页面与日志查看）
-- `@koishijs/plugin-http`（`.ai` 抓取 BWiki 渲染文本、调用 DeepSeek）
+- `@koishijs/plugin-http`（调用 DeepSeek 接口）
 - `koishi-plugin-cron`（定时任务，**可选**：未启用时 `sync.*` / `update` / `todolist` 命令照常可用，
   只是不会自动跑增量同步等定时任务，启动时会打一条警告）
 - 任意适配器（可选；QQ 适配器才能看到 markdown 按钮效果）
@@ -124,38 +115,29 @@ yarn add vectra cheerio @huggingface/transformers
 
 ### 🤖 AI 相关配置
 
-| 参数                  | 分组     | 说明                                                         | 默认值                              |
-| --------------------- | -------- | ------------------------------------------------------------ | ----------------------------------- |
-| `textSyncOnChange`    | 渲染文本 | 同步成功后自动抓取渲染文本并写索引                           | `true`                              |
-| `textApiUrl`          | 渲染文本 | BWiki 的 `api.php` 地址                                      | 空（由 `bwiki_site` 拼出）          |
-| `textTableMode`       | 渲染文本 | `flatten` 保留信息框+压平数据表 / `drop` 丢弃全部表格（会丢数值） | `flatten`                           |
-| `textMaxLength`       | 渲染文本 | 单页最多保留字数                                             | `20000`                             |
-| `textSyncInterval`    | 渲染文本 | 批量抓取时的页间间隔（毫秒）                                 | `300`                               |
-| `vectorEnabled`       | 向量     | 启用本地向量库                                               | `true`                              |
-| `vectorIndexPath`     | 向量     | vectra 索引目录                                              | `data/oni-vector`                   |
-| `embeddingModel`      | 向量     | 本地 Embedding 模型                                          | `Xenova/bge-small-zh-v1.5`          |
-| `embeddingDtype`      | 向量     | `q8` / `fp32` / `fp16` / `q4`                                | `q8`                                |
-| `embeddingCacheDir`   | 向量     | 模型缓存目录                                                 | `data/oni-models`                   |
-| `embeddingRemoteHost` | 向量     | 模型下载源                                                   | `https://hf-mirror.com`             |
-| `chunkSize`           | 向量     | 单块目标字数                                                 | `350`                               |
-| `chunkOverlap`        | 向量     | 相邻块重叠字数                                               | `60`                                |
-| `maxChunksPerPage`    | 向量     | 单页最多块数（决定索引体积，2G 建议 12）                     | `16`                                |
-| `retrieveTopK`        | 向量     | 全局检索返回块数（信息框数值常排第 4，建议 5；话题页补全另算） | `5`                                 |
-| `retrieveMinScore`    | 向量     | 最低余弦相似度                                               | `0.2`                               |
-| `queryInstruction`    | 向量     | BGE 查询指令前缀                                             | `为这个句子生成表示以用于检索相关文章：` |
-| `embedBatchSize`      | 向量     | 单批 Embedding 条数                                          | `4`                                 |
-| `aiEnabled`           | AI       | 启用 `.ai` 命令                                              | `true`                              |
-| `deepseekApiKey`      | AI       | DeepSeek API Key（也可用环境变量 `DEEPSEEK_API_KEY`）         | 空                                  |
-| `deepseekBaseUrl`     | AI       | API 地址                                                     | `https://api.deepseek.com`          |
-| `deepseekModel`       | AI       | 模型名                                                       | `deepseek-chat`                     |
-| `aiTemperature`       | AI       | 采样温度                                                     | `0.2`                               |
-| `aiMaxTokens`         | AI       | 回答最大 token                                               | `700`                               |
-| `aiTimeout`           | AI       | 请求超时（毫秒）                                             | `60000`                             |
-| `aiCooldown`          | AI       | 同一用户提问冷却（秒）                                       | `5`                                 |
-| `aiMaxQuestionLength` | AI       | 问题最大长度                                                 | `200`                               |
-| `aiMemoryTurns`       | AI       | 追问记忆保留的轮数（0 = 关闭）                               | `2`                                 |
-| `aiMemoryTtl`         | AI       | 追问记忆过期时间（秒），超时视为新话题                       | `600`                               |
-| `aiChannelMemory`     | AI       | 群内话题承接：别人刚问过，自己接着问也能懂「那它…」           | `true`                              |
+`aiEnabled` / `deepseek*` / `aiMemory*` 这几项仍然生效：
+
+| 参数                  | 分组 | 说明                                                          | 默认值                     |
+| --------------------- | ---- | ------------------------------------------------------------- | -------------------------- |
+| `aiEnabled`           | AI   | 启用 `.ai` 命令                                               | `true`                     |
+| `deepseekApiKey`      | AI   | DeepSeek API Key（也可用环境变量 `DEEPSEEK_API_KEY`）          | 空                         |
+| `deepseekBaseUrl`     | AI   | API 地址                                                      | `https://api.deepseek.com` |
+| `deepseekModel`       | AI   | 模型名（需支持 Function Calling，`deepseek-chat` 支持）         | `deepseek-chat`            |
+| `aiTemperature`       | AI   | 采样温度                                                      | `0.2`                      |
+| `aiMaxTokens`         | AI   | 单次回答最大 token                                            | `700`                      |
+| `aiTimeout`           | AI   | 请求超时（毫秒）                                              | `60000`                    |
+| `aiCooldown`          | AI   | 同一用户提问冷却（秒）                                        | `5`                        |
+| `aiMaxQuestionLength` | AI   | 问题最大长度                                                  | `200`                      |
+| `aiMemoryTurns`       | AI   | 追问记忆保留的轮数（0 = 关闭）                                | `2`                        |
+| `aiMemoryTtl`         | AI   | 追问记忆过期时间（秒），超时视为新话题                        | `600`                      |
+| `aiChannelMemory`     | AI   | 群内话题承接：别人刚问过，自己接着问也能懂「那它…」            | `true`                     |
+
+> **已废弃（0.12.0 起不再读取，仅为兼容旧配置保留键位）**：
+> `textSyncOnChange`、`textApiUrl`、`textTableMode`、`textMaxLength`、`textSyncInterval`，
+> 以及整组向量配置 `vectorEnabled`、`vectorIndexPath`、`embeddingModel`、`embeddingDtype`、
+> `embeddingCacheDir`、`embeddingRemoteHost`、`chunkSize`、`chunkOverlap`、`maxChunksPerPage`、
+> `retrieveTopK`、`retrieveMinScore`、`queryInstruction`、`embedBatchSize`。
+> 控制台里它们仍会显示，改动不会产生任何效果，可以直接删掉。
 
 > **默认值形同虚设**：账号默认值是 `1`，必须改成真实账号，否则登录一定失败。
 
@@ -165,78 +147,58 @@ yarn add vectra cheerio @huggingface/transformers
 
 ### 🔍 查询
 
-| 命令                | 别名      | 说明                             | 权限 |
-| ------------------- | --------- | -------------------------------- | ---- |
-| `x <itemName:text>` | `/查wiki` | 查询页面（标题 / 全拼 / 首字母） | -    |
-| `ai <question:text>`| `/问缺氧` | 基于 BWIKI 资料的 AI 问答         | -    |
-| `ai.status`         | -         | 查看 AI / 向量索引状态           | 1    |
-| `ai.sync [pageTitle]` | -       | 抓取渲染文本（不填则全量）       | 4    |
-| `ai.reindex`        | -         | 用本地正文重建向量索引           | 4    |
+| 命令                | 别名      | 说明                                | 权限 |
+| ------------------- | --------- | ----------------------------------- | ---- |
+| `x <itemName:text>` | `/查wiki` | 查询页面（标题 / 全拼 / 首字母）    | -    |
+| `ai <question:text>`| `/问缺氧` | 基于 BWIKI 资料的 AI 问答（工具调用）| -    |
+| `ai.status`         | -         | 查看 AI / BWiki 客户端状态          | 1    |
 
-> 首次部署顺序：`update`（拉页面列表）→ `ai.sync`（抓渲染文本 + 建索引）；
-> 之后每小时增量同步会自动维护文本与索引，无需再手动执行。
+> 部署顺序：先 `update` 把页面列表拉进 `wikipages`（`.ai` 的关键词→标题解析依赖它，
+> 缺失时也能工作，只是会退化到 BWiki 全文检索）。
 >
-> `ai.sync` 不依赖 `update`：本地 `wikipages` 为空时会自动改用 bwiki 的 `list=allpages` 枚举页面。
-> 抓取时优先走已登录的 bwiki 客户端（mwn，自带 Referer/Cookie）；退回 `ctx.http` 时也会自动补 `Referer`——
-> 缺少 `Referer` 会被 bwiki 的 WAF 以 **HTTP 567** 拦掉。
+> 正文不再预热、不再建索引：每次提问按需通过 mwn 取一次，**结果缓存 10 分钟**。
+> bwiki 的 WAF 要求带 `Referer`，mwn 客户端已内置，无需额外配置。
 >
 > **追问**：`.ai` 会按「平台 + 频道 + 用户」记住最近 2 轮（默认 10 分钟内有效）。
-> 先问「电解器耗电多少」，再问「那它能干什么」时，上一轮的问题会被并入检索串，模型也能从历史里知道「它」指谁。
->
-> **话题页补全**：确定话题页后（问题里点名的页面 → 上一轮记忆 → 命中集中的页面），
-> 该页的**第 0 块（信息框/简介）**一定钉进上下文——耗电、产热、尺寸这些单点数值在相似度排序里
-> 只排第 4~5，靠排名召回很脆弱。点名的页面或宽泛问题会把**整页**交给模型（预算 5000 字 / 12 块），
-> 所以「电解器能干哈」这种问题也能拿到信息框、建造、工作条件、技巧，而不是只看到开头一段；
-> 追问则只补该页最相关的 3 块，保持聚焦。
+> 先问「电解器耗电多少」，再问「那它能干什么」时，历史问答会一起送给模型，
+> 模型据此把「它」解析成「电解器」再去检索。
 >
 > **群内承接**（`aiChannelMemory`，默认开）：自己还没提问记录时，会承接**群里上一条被回答的问题**。
-> 比如 alice 问「氧石精炼炉是什么」，bob 接着问「那他耗电多少」，bob 这一问会以「氧石精炼炉是什么」为语境检索，
+> 比如 alice 问「氧石精炼炉是什么」，bob 接着问「那他耗电多少」，bob 这一问会以「氧石精炼炉」为语境检索，
 > 回复里会附一行 `💭 承接群内上一问：…` 说明依据；答「未提及」的轮次不会成为群话题。
 >
 > 记忆会**落库**（`oniaimemory` 表），Koishi 重启、热重载后依然能承接上一问；过期行按 `aiMemoryTtl` 自动清理。
 > `aiMemoryTurns=0` 可整体关闭。
 
-### 🧠 2G 内存够不够（实测数据）
+### 🧠 2G 内存够不够
 
-在本机（Windows / Node 26 / q8 量化模型）分段实测 RSS：
+0.12.0 起 AI 链路不再加载任何本地模型，内存占用回到基线：
 
 | 阶段 | RSS |
 | ---- | --- |
-| Koishi + sqlite + http + cron 基线 | 103 MB |
-| 加载 `bge-small-zh` q8 Embedding 模型后 | 216 MB（模型约占 113 MB） |
-| 再挂 1 万个文本块的索引（`index.json` 81 MB），检索后常驻 | 282 MB |
-| 释放模型后 | 255 MB（onnxruntime 的原生内存不一定立刻归还系统） |
+| Koishi + sqlite + http + cron 基线 | 约 103 MB |
+| 一次问答（mwn 抓 1 页 + cheerio 解析 + 正文缓存 3 KB） | 峰值增加 < 20 MB |
+| 旧方案（q8 Embedding 模型 + 1 万块向量索引常驻） | 282 MB |
 
-> 建索引的过程中会有临时峰值（实测写入 1 万块时到过 376 MB，含构建批量数组的开销），
-> 所以 `ai.sync` / `ai.reindex` 尽量低峰执行。
+- 正文缓存上限 **50 页 × 3 KB ≈ 150 KB**，可以忽略；
+- `Model`、`onnxruntime` 相关依赖已移除，Windows 上也不会再有 DLL 问题；
+- 真正的成本变成 **DeepSeek token**：一次问答通常 2 次调用，正文 3000 字 ≈ 2.5k token。
 
-结论与经验值：
+> 想再省一点：把 `aiMaxTokens` 调到 `500`，并保持 `aiMemoryTurns=2`（记忆本身几乎不占内存）。
 
-- **索引常驻内存 ≈ 每个文本块 6~7 KB**（384 维 float）；1 万块 ≈ 66 MB，3 万块 ≈ 200 MB。
-- 索引体积取决于「页面数 × 单页块数」，所以 `maxChunksPerPage` / `textMaxLength` 就是内存阀门。
-- 模型只在第一次问答时才加载（之后常驻），不会影响普通同步命令。
-
-> **改过 `renderText` / `textTableMode` 之后必须重跑 `ai.sync`**：
-> `wikitexts` 里存的是**已抽好的纯文本**，`ai.reindex` 只会用旧文本重建向量，不会重新抓页面。
->
-> 只改**切块参数**（`chunkSize` / `chunkOverlap` / `maxChunksPerPage` / `retrieveTopK` / `retrieveMinScore`）时，
-> 执行 `ai.reindex` 即可，无需重新抓取。
-
-**2G Windows Server 推荐档**（`ai.status` 里「索引体积」超过 150 MB 时按此收紧）：
+**2G Windows Server 推荐档**：
 
 | 参数 | 建议值 |
 | ---- | ------ |
-| `textMaxLength` | `8000` |
-| `maxChunksPerPage` | `12` |
-| `chunkSize` / `chunkOverlap` | `350` / `60` |
-| `embedBatchSize` | `2` |
-| `aiMemoryTurns` | `2`（记忆本身很小，不用关） |
+| `aiMaxTokens` | `600` |
+| `aiCooldown` | `5`（防刷，顺带减少 token 消耗） |
+| `aiMemoryTurns` | `2` |
+| `aiChannelMemory` | `true` |
 
 另外两点务必做：
 
-1. **Windows 虚拟内存（页面文件）保持 ≥ 4GB**，避免瞬时峰值直接 OOM；
-2. `ai.sync` / `ai.reindex` 不要和「同步所有页面」、定时任务撞车，放在低峰跑；
-3. Windows Server 若加载模型时报 onnxruntime 相关的 DLL 错误，装一下 **Visual C++ 2015-2022 运行库**（x64）即可。
+1. **Windows 虚拟内存（页面文件）保持 ≥ 2GB**，给 Node 的 GC 留出余量；
+2. `.ai` 的瓶颈已经是 DeepSeek 的响应时间，与同步任务撞车只会让回答慢几秒，不再需要错峰。
 
 ### 🔄 同步
 
@@ -308,14 +270,13 @@ yarn add vectra cheerio @huggingface/transformers
 | 表名        | 字段                                                                                                            |
 | ----------- | --------------------------------------------------------------------------------------------------------------- |
 | `wikipages` | `id`、`title`、`pinyin_full`、`pinyin_first`、`contributor`、`change_time`                                       |
-| `wikitexts` | `id`（主键=页面标题）、`title`、`pageid`、`revid`、`hash`、`text`、`updated_at`                                  |
 | `oniaimemory` | `id`（主键=记忆键）、`payload`（JSON）、`updated_at`（毫秒时间戳）                                       |
 | `onitodos`  | `id`、`title`、`content`、`completed`、`createdBy`、`createdAt`、`updatedAt`                                     |
 
-`wikipages` / `wikitexts` / `oniaimemory` 通过 `Tables` 接口增强声明（见 `databaseExtension.ts`）；`onitodos` 目前**没有**做接口增强。
+`wikipages` / `oniaimemory` 通过 `Tables` 接口增强声明（见 `databaseExtension.ts`）；`onitodos` 目前**没有**做接口增强。
 
-`wikitexts.text` 存的是 BWiki **渲染后的纯文本**（不是 Wikitext 源码），`hash` 是正文的 sha1，
-用于在增量同步时跳过未变化的页面、避免重复 Embedding。
+> 0.12.0 起不再维护 `wikitexts` 表（渲染文本改为按需抓取）。旧库里的这张表不会被删除，
+> 但也**不会再被读写**，可以自行 `DROP TABLE wikitexts` 回收空间。
 
 ## 🎨 控制台界面
 
@@ -332,30 +293,28 @@ yarn add vectra cheerio @huggingface/transformers
 ```
 src/
 ├── index.ts                  # 组合根：SUB_PLUGINS 注册表 + 控制台入口
-├── config.ts                 # 配置的唯一声明处（账号 / 站点 / 通知 / 定时 / 渲染文本 / 向量 / AI）
+├── config.ts                 # 配置的唯一声明处（账号 / 站点 / 通知 / 定时 / AI；旧的向量组已废弃）
 ├── services/
-│   ├── wikiBotService.ts     # wikiBot 服务：登录、代理、透明重登录
-│   ├── vectorService.ts      # vector 服务：本地 Embedding + vectra 索引（检索/写入）
-│   ├── aiService.ts          # DeepSeek 客户端 + 防幻觉提示词组装
+│   ├── wikiBotService.ts     # wikiBot 服务：登录、代理、透明重登录、fetchPagePlainText
+│   ├── aiService.ts          # DeepSeek 客户端（Function Calling）+ 两套提示词
 │   ├── aiMemory.ts           # 追问记忆（用户 / 群话题）与上下文选择
 │   ├── messageRenderer.ts    # QQ markdown+按钮 / 纯文本 的渲染
 │   └── consoleLogProvider.ts # 控制台日志服务（onilogs）
 ├── plugins/
-│   ├── databaseExtension.ts  # wikipages / wikitexts 表定义
+│   ├── databaseExtension.ts  # wikipages / oniaimemory 表定义
 │   ├── queryCommands.ts      # x / 查wiki
-│   ├── aiQueryCommands.ts    # ai / ai.status / ai.sync / ai.reindex
-│   ├── syncCommands.ts       # sync.* 命令 + 同步相关定时任务 + 同步后抽取渲染文本
+│   ├── aiQueryCommands.ts    # ai / ai.status（Agent 调度）
+│   ├── syncCommands.ts       # sync.* 命令 + 同步相关定时任务
 │   ├── updateCommands.ts     # update.* / redirect / relogin
 │   ├── routeRedirect.ts      # 短链路由
 │   └── todoList.ts           # TodoList 命令 + 控制台监听 + 定时任务
 ├── sync/
-│   ├── pageSync.ts           # PageSyncer：单页 / 全量 / 增量更新（含 onSynced 钩子）
-│   ├── textSync.ts           # RenderedTextSyncer：action=parse → 纯文本 → wikitexts → 向量库
+│   ├── pageSync.ts           # PageSyncer：单页 / 全量 / 增量更新
 │   ├── moduleSync.ts         # ModuleSyncer：模块同步
 │   └── imgSync.ts            # ImageSyncer：图片同步
 └── utils/
     ├── tools.ts              # 拼音、时间格式化、标题规范化、站点 URL 规范化等
-    ├── renderText.ts         # HTML → 纯文本、文本切块（纯函数，可单测）
+    ├── renderText.ts         # HTML → 纯文本（纯函数，可单测）
     ├── async.ts              # sleep + withRetry（全项目统一的重试语义）
     └── matcher.ts            # 查询打分与模糊匹配（纯函数，可单测）
 
@@ -370,9 +329,7 @@ client/                       # 控制台前端（Vue）
 [`src/index.ts`](src/index.ts) 是唯一的组合根。它按**依赖顺序**注册一组子插件：
 
 ```
-WikiBotService（提供 wikiBot 服务，必须最先）
-  ↓
-VectorService（提供 vector 服务：本地 Embedding + 索引）
+WikiBotService（提供 wikiBot 服务：登录 + 取正文，必须最先）
   ↓
 ConsoleLogProvider / DatabaseExtension（提供 console 数据源与数据表）
   ↓
@@ -384,34 +341,33 @@ RouteRedirect / SyncCommands / QueryCommands / UpdateCommands / TodoList / AiQue
 ### AI 数据流
 
 ```
-GG 原站 Wikitext ──(PageSyncer)──> bwiki
-                                    │
-                       (onSynced 钩子，同步成功后)
-                                    ↓
-        BWiki action=parse&prop=text ──> HTML ──(cheerio)──> 纯文本
-                                    │
-                     wikitexts 表（hash 去重）
-                                    ↓
-                 chunkText ──> bge-small-zh Embedding ──> vectra 索引
-                                    ↓
-                     .ai 提问 ──> 话题页判定 + 检索 ──> DeepSeek ──> QQ 回复
+.ai 提问
+   ↓  第 1 轮（tools + tool_choice:'auto'）
+DeepSeek 决定调用 search_oni_bwiki(keyword)
+   ↓
+wikipages 精确标题 → 拼音/首字母模糊 → BWiki 全文检索 → 关键词原样当标题
+   ↓
+WikiBotService.fetchPagePlainText(title)
+   ├─ mwn.parseTitle(title, { prop:'text', redirects:true, ... })   ← 模板/模块已展开
+   ├─ extractPlainText(html, { tableMode:'flatten', maxLength:3000 })
+   └─ 进程内缓存 10 分钟 / 最多 50 页
+   ↓  第 2 轮（tools + tool_choice:'none'，role:'tool' 回填正文）
+DeepSeek 生成回答 ──> QQ / 纯文本 + 数据来源
 ```
 
-Wikitext 源码只用于同步，**不会**进入检索链路；`onSynced` 钩子的失败只记日志，不影响同步结果。
+关键约束：
 
-检索这一步会先定「话题页」，再决定给模型多少资料：
+| 规则 | 原因 |
+| --- | --- |
+| 每个 `tool_call` 都必须回一条 `role:'tool'` | 少一条，下一次请求会被服务端判为 400 |
+| 第 2 轮传 `tools` 但 `tool_choice:'none'` | 消息结构对各家兼容层都合法，同时禁止再调工具 |
+| 最多执行 2 个检索 | 比较类问题够用；更多会导致延迟与 token 翻倍 |
+| 模型不调工具时用 `tool_choice:'required'` 强制一次 | 防止它凭记忆作答（缺氧数值极易记错） |
+| 清洗不删 `<table>` | bwiki 的信息框就是 `table.infobox`，删了等于把耗电/产热/尺寸删掉 |
 
-| 场景 | 话题页来源 | 交给模型的资料 |
-| --- | --- | --- |
-| 问题点名了页面（`氧石精炼炉怎么用`） | 问题里出现的页面标题（最长匹配，最多 2 个） | 该页**整页**（预算 5000 字 / 12 块）+ 其余检索命中 |
-| 宽泛问题，命中集中在某页（`电解器能干哈`） | 本轮 5 块命中里过半来自同一页 | 同上 |
-| 追问（`那它耗电多少`） | 上一轮记忆里的页面 | 第 0 块 + 该页最相关的 3 块（上限 `retrieveTopK + 2`） |
-
-话题页的**第 0 块（信息框/简介）永远钉进上下文**：耗电、产热、尺寸这些单点数值在相似度排序里
-只排第 4~5，靠排名召回太脆弱。
-
-> 升级提示：`0.11.0` 之前的抽取器会把信息框当噪音丢掉。升级后执行一次 `ai.sync`
-> （会重新抓取渲染文本，正文变化时自动重建该页的向量块），历史页面才会带上信息框数值。
+> 抽取器优先保留信息框：`电解器` 抽出 2637 字，含 `电力：消耗 120 瓦`、`过热：75°C`；
+> `氧石精炼炉` 抽出 939 字，含 `电力：消耗 1200 瓦`、`建造时间：480 秒`。
+> 若把表格全删，这两页会掉到 586 / 2620 字且**不含任何数值**。
 
 ### 如何新增一个子插件
 
@@ -495,15 +451,20 @@ yarn test        # tsc 编译到 .test-build/，再用 mocha 跑
 页面不在本地缓存中（可能是新增页面），先执行 `update`。
 
 **`.ai` 一直回答「抱歉，资料中未提及相关信息」**
-1. 执行 `ai.status`，确认「已入库页面」不是 0；为 0 时先执行 `ai.sync`（会自动枚举页面，也可先 `update` 补缓存）；
-2. 「索引文本块」为 0 时执行 `ai.reindex`（索引被清空或模型刚就绪）；
+1. 执行 `ai.status`，确认「BWiki 客户端」是 ✅；显示 ❌ 时先 `relogin`（`.ai` 取正文完全依赖 mwn 登录态）；
+2. 「本地页面缓存」为 0 说明没跑过 `update`——此时仍能用，只是关键词→标题会退化到 BWiki 全文检索，建议补跑 `update`；
 3. 确认问句里有具体名词（如「电解器耗电多少」而不是「耗电多少」），追问依赖记忆承接才能补全主语；
-4. 仍漏召回时调大 `retrieveTopK`（如 6）或调小 `retrieveMinScore`（如 0.15）。
-   **信息框里的数值通常排在第 4 位左右**，`retrieveTopK=3` 时会正好被裁掉——这是 0.11.0 调整默认值的原因。
+4. 看日志里 `[ai] Agent 决定检索:` 那行实际抓的是哪一页：
+   - 抓到的是**别的页面** → 关键词解析偏了，把问句写得更接近页面标题；
+   - 显示 **未找到** → 该词条在 bwiki 上确实没有对应页面（或未登录）。
 
-**`ai.sync` 报 HTTP 567 / 返回一串 HTML**
-bwiki 的 WAF 拦截。抓取请求必须带 `Referer`（插件会自动补 `https://<bwiki_site>/`），
-优先使用已登录的 bwiki 客户端；若仍被拦，先执行 `relogin` 再重试，或把 `textSyncInterval` 调大（如 1000）。
+**`.ai` 报「AI 服务暂时不可用」**
+日志里会带 DeepSeek 的 HTTP 状态与 message。常见原因：Key 无效、余额不足、
+模型名不支持 Function Calling（必须用 `deepseek-chat`，`deepseek-reasoner` 不支持 tools）。
+
+**`ai.status` 显示 BWiki 客户端 ❌**
+bwiki 登录失败。检查 `bwikiusername` / `bwikipassword`，执行 `relogin` 重试；
+短时间内反复失败会触发限流，需等约 5 分钟。
 
 **`sync` / `update` / `todo` 命令在控制台里「消失」了**
 这些子插件依赖 `wikiBot` / `database`，并把 `cron` 声明为**可选**依赖。
@@ -512,17 +473,10 @@ bwiki 的 WAF 拦截。抓取请求必须带 `Referer`（插件会自动补 `htt
 2. 是否安装了 `@koishijs/plugin-http`（`.ai` 需要）；
 3. 未启用 `koishi-plugin-cron` 只影响定时任务，会在启动日志里打一条黄色警告。
 
-**模型下载失败 / 卡住**
-`embeddingRemoteHost` 默认走 `https://hf-mirror.com`；若网络环境不同，可改为 `https://huggingface.co`，
-或把模型文件手动放到 `embeddingCacheDir` 后把 `embeddingRemoteHost` 留空（离线）。
-
 **内存占用偏高**
-- 保持 `embeddingDtype="q8"`、调小 `embedBatchSize`；
-- 调小 `maxChunksPerPage` / `textMaxLength` 以压缩索引体积（索引会整体载入内存）；
-- `ai.status` 会显示「索引体积」，超过 150 MB 建议按上文的 2G 推荐档收紧后 `ai.reindex`。
-
-**Windows 上加载模型报 onnxruntime / DLL 找不到**
-安装 **Visual C++ 2015-2022 运行库（x64）**；另外确认页面文件（虚拟内存）足够大。
+- 0.12.0 起已不再加载本地模型，RSS 应回到 100~130 MB；若仍偏高，检查是否还装着旧版插件目录；
+- `data/oni-vector`、`data/oni-models` 可以直接删掉（不再读写）；
+- 仍不够时调小 `aiMaxTokens`、关掉 `aiChannelMemory`。
 
 **QQ 下只显示纯文本**
 markdown 与按钮依赖 `session.platform === "qq"`，请确认适配器正确上报平台。

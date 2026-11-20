@@ -2,27 +2,31 @@ import { Context } from "koishi";
 import type { AiConfig } from "../config";
 import { getErrorMessage } from "../utils/tools";
 
-export interface ChatMessage {
-  role: "system" | "user" | "assistant";
-  content: string;
-}
+/**
+ * DeepSeek 对话客户端（含 Function Calling）。
+ *
+ * 只用 `ctx.http`，不额外引入 SDK：请求体就是标准的 chat/completions，
+ * 这样在 2G 小机器上少一个依赖、少一份常驻内存。
+ */
 
-/** 送进模型的检索片段 */
-export interface AiContextChunk {
-  title: string;
-  url?: string;
-  text: string;
-  /** 索引里的页面 id（= 页面标题）；追问时用它定位同一页 */
-  documentId?: string;
-}
+/** 第 1 轮的系统提示词：只负责「先查资料再回答」 */
+export const AGENT_SYSTEM_PROMPT = [
+  "你是一个缺氧（Oxygen Not Included）游戏助手，可以使用 search_oni_bwiki 工具检索缺氧中文 BWIKI。",
+  "规则：",
+  "1. 只要问题涉及游戏内容（建筑、元素、植物、生物、物品、机制、数值、配方、技巧），**必须先调用工具**检索，不得凭记忆作答；",
+  "2. 绝对禁止使用现实世界的物理化学知识，绝对禁止编造数值；",
+  "3. 用户问题是「它」「这个」这类追问时，结合对话历史判断指的是哪个词条，再把该词条作为检索关键词；",
+  "4. 关键词尽量用游戏内标准中文名（如「电解器」「氧石精炼炉」），不要带「怎么」「多少」这类问句成分；",
+  "5. 一次最多检索 2 个关键词（比如比较两个建筑时）。",
+].join("\n");
 
 /**
- * 防幻觉用的系统提示词。
+ * 第 2 轮的系统提示词：拿到的资料是唯一事实来源。
  *
- * 要求逐字保留「严格且仅根据资料回答 / 资料中未提及就直说」这两条硬约束，
- * 因为在缺氧这种数值密集的游戏里，模型一旦动用现实世界的物理直觉就会编造数值。
+ * 逐字保留「严格且仅根据资料回答 / 资料中未提及就直说」这两条硬约束——
+ * 缺氧的数值密度极高，模型一旦动用现实物理直觉就会编出资料里没有的数值。
  */
-export const SYSTEM_PROMPT = [
+export const ANSWER_SYSTEM_PROMPT = [
   "你是一个缺氧游戏助手。请【严格且仅】根据以下提供的 BWIKI 资料回答用户的问题。",
   "绝对禁止使用现实世界的物理化学知识，绝对禁止编造。",
   "如果资料中未提及，请直接回答：抱歉，资料中未提及相关信息。",
@@ -34,7 +38,7 @@ export const SYSTEM_PROMPT = [
   "4. 若用户的问题是对上一轮的追问（如「它」「这个」「那它能干什么」），结合对话历史理解指代，但仍然只能使用资料中的信息。",
 ].join("\n");
 
-/** 检索为空时直接使用该文案，避免无意义的模型调用 */
+/** 资料为空时直接使用该文案，避免无意义的模型调用 */
 export const NO_ANSWER_TEXT = "抱歉，资料中未提及相关信息。";
 
 /** 判断模型回答是否就是「资料未提及」（用于决定要不要展示来源） */
@@ -44,62 +48,67 @@ export function isNoAnswer(answer: string): boolean {
   return normalized.length > 0 && normalized.startsWith(target);
 }
 
-/** 一轮历史问答（用于多轮追问） */
-export interface AiHistoryTurn {
-  question: string;
-  answer: string;
+/** OpenAI 兼容的 tool 定义 */
+export interface ToolDefinition {
+  type: "function";
+  function: {
+    name: string;
+    description: string;
+    parameters: Record<string, unknown>;
+  };
 }
 
-/** 把检索片段拼成提示词里的「资料」区块 */
-export function buildContext(chunks: AiContextChunk[]): string {
-  return chunks
-    .map((chunk, index) => {
-      const source = chunk.url ? `${chunk.title}（${chunk.url}）` : chunk.title;
-      return `[资料${index + 1}] 页面：${source}\n${chunk.text}`;
-    })
-    .join("\n\n");
+/** 模型返回的原始 tool_call（`arguments` 是 JSON 字符串，必须原样回传） */
+export interface RawToolCall {
+  id: string;
+  type: "function";
+  function: { name: string; arguments: string };
 }
+
+export type ToolChoice =
+  | "auto"
+  | "none"
+  | "required"
+  | { type: "function"; function: { name: string } };
 
 /**
- * 组装 DeepSeek 的 messages：资料进 system，历史问答按轮次回放，用户问题进 user。
+ * 送给 DeepSeek 的消息。
  *
- * 多轮时把之前的问答作为 `user`/`assistant` 交替插入，模型才能理解「它」指的是谁；
- * 但每轮的**资料仍然是当前检索到的那一份**，避免历史回答被当成新事实。
+ * `assistant` 必须能带 `tool_calls`、`tool` 必须带 `tool_call_id`——
+ * 少一条 tool 回复，下一次请求会被服务端直接判为 400。
  */
-export function buildMessages(
-  question: string,
-  chunks: AiContextChunk[],
-  history: AiHistoryTurn[] = [],
-): ChatMessage[] {
-  const messages: ChatMessage[] = [
-    {
-      role: "system",
-      content: `${SYSTEM_PROMPT}\n\n【BWIKI 资料开始】\n${buildContext(chunks)}\n【BWIKI 资料结束】`,
-    },
-  ];
+export type AgentMessage =
+  | { role: "system" | "user"; content: string }
+  | { role: "assistant"; content: string | null; tool_calls?: RawToolCall[] }
+  | { role: "tool"; tool_call_id: string; content: string };
 
-  for (const turn of history) {
-    if (turn.question && turn.answer) {
-      messages.push({ role: "user", content: turn.question });
-      messages.push({ role: "assistant", content: turn.answer });
-    }
-  }
+/** 解析后的工具调用：参数已从 JSON 字符串解开 */
+export interface ParsedToolCall {
+  id: string;
+  name: string;
+  args: Record<string, unknown>;
+  raw: RawToolCall;
+}
 
-  messages.push({ role: "user", content: question });
-  return messages;
+/** 一次 chat/completions 的结果 */
+export interface CompletionResult {
+  content: string;
+  toolCalls: ParsedToolCall[];
+  /** 原样的 assistant 消息，第 2 轮要原封不动塞回 messages */
+  message: Extract<AgentMessage, { role: "assistant" }>;
 }
 
 interface DeepSeekChatResponse {
-  choices?: Array<{ message?: { content?: string } }>;
+  choices?: Array<{
+    message?: {
+      role?: string;
+      content?: string | null;
+      tool_calls?: RawToolCall[];
+    };
+  }>;
   error?: { message?: string };
 }
 
-/**
- * DeepSeek 对话客户端。
- *
- * 只用 `ctx.http`，不额外引入 SDK：请求体就是标准的 chat/completions，
- * 这样在 2G 小机器上少一个依赖、少一份常驻内存。
- */
 export class AiService {
   constructor(
     private readonly ctx: Context,
@@ -115,10 +124,21 @@ export class AiService {
     return Boolean(this.settings.aiEnabled && this.apiKey);
   }
 
-  async chat(
-    messages: ChatMessage[],
-    options: { temperature?: number; maxTokens?: number } = {},
-  ): Promise<string> {
+  /**
+   * 调一次 chat/completions。
+   *
+   * 不传 `tools` 时模型只能给出文本（第 2 轮就是这么用的：强制收敛到终稿）；
+   * 传 `toolChoice: {type:'function',...}` 可以逼模型一定发起检索。
+   */
+  async complete(
+    messages: AgentMessage[],
+    options: {
+      tools?: ToolDefinition[];
+      toolChoice?: ToolChoice;
+      temperature?: number;
+      maxTokens?: number;
+    } = {},
+  ): Promise<CompletionResult> {
     if (!this.settings.aiEnabled) {
       throw new Error("AI 问答未启用（aiEnabled=false）");
     }
@@ -133,17 +153,23 @@ export class AiService {
       this.settings.deepseekBaseUrl || "https://api.deepseek.com"
     ).replace(/\/+$/, "");
 
+    const body: Record<string, unknown> = {
+      model: this.settings.deepseekModel,
+      messages,
+      temperature: options.temperature ?? this.settings.aiTemperature,
+      max_tokens: options.maxTokens ?? this.settings.aiMaxTokens,
+      stream: false,
+    };
+    if (options.tools?.length) {
+      body.tools = options.tools;
+      if (options.toolChoice) body.tool_choice = options.toolChoice;
+    }
+
     let response: DeepSeekChatResponse;
     try {
       response = await this.ctx.http.post<DeepSeekChatResponse>(
         `${baseUrl}/chat/completions`,
-        {
-          model: this.settings.deepseekModel,
-          messages,
-          temperature: options.temperature ?? this.settings.aiTemperature,
-          max_tokens: options.maxTokens ?? this.settings.aiMaxTokens,
-          stream: false,
-        },
+        body,
         {
           headers: {
             Authorization: `Bearer ${apiKey}`,
@@ -156,14 +182,46 @@ export class AiService {
       throw new Error(`调用 DeepSeek 失败：${describeHttpError(error)}`);
     }
 
-    const content = response?.choices?.[0]?.message?.content?.trim();
-    if (!content) {
+    const choice = response?.choices?.[0]?.message;
+    if (!choice) {
       throw new Error(
-        `DeepSeek 返回了空回答：${response?.error?.message ?? "未知原因"}`,
+        `DeepSeek 返回了空响应：${response?.error?.message ?? "未知原因"}`,
       );
     }
-    return content;
+
+    const rawCalls = choice.tool_calls ?? [];
+    const message: Extract<AgentMessage, { role: "assistant" }> = {
+      role: "assistant",
+      // 用空串而不是 null：只有「带 tool_calls」的 assistant 消息才允许 content 为 null
+      content: choice.content ?? "",
+    };
+    if (rawCalls.length > 0) message.tool_calls = rawCalls;
+
+    return {
+      content: (choice.content ?? "").trim(),
+      toolCalls: rawCalls.map(parseToolCall),
+      message,
+    };
   }
+}
+
+/** `arguments` 是 JSON 字符串，解析失败时给出空参数（由调用方判定关键词缺失） */
+function parseToolCall(call: RawToolCall): ParsedToolCall {
+  let args: Record<string, unknown> = {};
+  try {
+    const parsed = JSON.parse(call.function?.arguments || "{}");
+    if (parsed && typeof parsed === "object") {
+      args = parsed as Record<string, unknown>;
+    }
+  } catch {
+    args = {};
+  }
+  return {
+    id: call.id,
+    name: call.function?.name ?? "",
+    args,
+    raw: call,
+  };
 }
 
 /** 尽量从 Koishi HTTP 错误里挖出可读信息，而不是只打一个 [object Object] */

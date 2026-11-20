@@ -2,7 +2,6 @@ import { Context } from "koishi";
 import { resolve } from "path";
 import { Config } from "./config";
 import { WikiBotService } from "./services/wikiBotService";
-import { VectorService } from "./services/vectorService";
 import { ConsoleLogProvider } from "./services/consoleLogProvider";
 import { DatabaseExtension } from "./plugins/databaseExtension";
 import { RouteRedirect } from "./plugins/routeRedirect";
@@ -19,8 +18,8 @@ export const name = "oni-sync-bot";
 /**
  * 子插件注册表。
  *
- * **顺序即依赖顺序**：`WikiBotService` 提供 `wikiBot`、`VectorService` 提供 `vector`，
- * 二者都被后面的子插件 `inject`，因此必须排在前面。
+ * **顺序即依赖顺序**：`WikiBotService` 提供 `wikiBot`，被后面的子插件 `inject`，
+ * 因此必须排在前面。
  *
  * ## 如何新增一个子插件
  *
@@ -34,7 +33,6 @@ export const name = "oni-sync-bot";
  */
 const SUB_PLUGINS = [
   WikiBotService,
-  VectorService,
   ConsoleLogProvider,
   DatabaseExtension,
   RouteRedirect,
