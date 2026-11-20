@@ -39,7 +39,7 @@ export class RouteRedirect {
       router.redirect(targetUrl);
     });
 
-    ctx.server.use("/ggwiki", async (router, next) => {
+    ctx.server.use("/ggwiki", async (router) => {
       const fullPath = router.path.replace("/ggwiki", "") || "";
 
       // 安全校验：禁止路径遍历（先解码 URL 编码的路径，防止绕过检测）

@@ -20,11 +20,9 @@ const SPECIAL_CASES = new Map([
 export class QueryCommands {
   public static readonly inject = ["database"];
   public config: QueryCommandsConfig;
-  private ctx: Context;
   private renderer: MessageRenderer;
 
   constructor(ctx: Context, config: QueryCommandsConfig) {
-    this.ctx = ctx;
     this.config = config;
     this.renderer = new MessageRenderer(ctx, config.domain);
     this.registerCommands(ctx);
@@ -49,12 +47,7 @@ export class QueryCommands {
         const { pinyin_full: queryPinyinFull, pinyin_first: queryPinyinFirst } =
           generatePinyinInfo(queryKey);
 
-        const preciseMatch = await this.findPreciseMatch(
-          ctx,
-          queryKey,
-          queryPinyinFull,
-          queryPinyinFirst,
-        );
+        const preciseMatch = await this.findPreciseMatch(ctx, queryKey);
         if (preciseMatch) {
           return this.renderer.resultMessage(
             session,
@@ -92,8 +85,6 @@ export class QueryCommands {
   private async findPreciseMatch(
     ctx: Context,
     queryKey: string,
-    queryPinyinFull: string,
-    queryPinyinFirst: string,
   ): Promise<(WikiPages & { prefix?: string }) | null> {
     const checks: Array<{ query: Record<string, string>; prefix?: string }> = [
       { query: { title: queryKey }, prefix: "✅ 精准匹配成功" },

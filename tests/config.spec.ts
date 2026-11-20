@@ -5,8 +5,6 @@ import {
   NotifyConfig,
   ScheduleConfig,
   SiteConfig,
-  VectorConfig,
-  WikiTextConfig,
 } from "../src/config";
 
 /**
@@ -23,8 +21,6 @@ const GROUPS = {
   SiteConfig,
   NotifyConfig,
   ScheduleConfig,
-  WikiTextConfig,
-  VectorConfig,
   AiConfig,
 };
 
@@ -71,26 +67,6 @@ describe("插件配置 schema", () => {
       "notifyBotPlatform",
       // 定时任务
       "updateCron",
-      // 渲染文本
-      "textSyncOnChange",
-      "textApiUrl",
-      "textTableMode",
-      "textMaxLength",
-      "textSyncInterval",
-      // 向量检索
-      "vectorEnabled",
-      "vectorIndexPath",
-      "embeddingModel",
-      "embeddingDtype",
-      "embeddingCacheDir",
-      "embeddingRemoteHost",
-      "chunkSize",
-      "chunkOverlap",
-      "maxChunksPerPage",
-      "retrieveTopK",
-      "retrieveMinScore",
-      "queryInstruction",
-      "embedBatchSize",
       // AI 问答
       "aiEnabled",
       "deepseekApiKey",
@@ -104,9 +80,39 @@ describe("插件配置 schema", () => {
       "aiMemoryTurns",
       "aiMemoryTtl",
       "aiChannelMemory",
+      "aiCodeBlockMinChars",
     ];
 
     const missing = expected.filter((key) => !all.has(key));
     assert.deepEqual(missing, [], "缺少配置键");
+  });
+
+  it("已删除的向量 / 渲染文本配置不再出现", () => {
+    const all = new Set(Object.values(GROUPS).flatMap((s) => keysOf(s)));
+    const removed = [
+      // 本地向量检索（0.12.0 废弃，0.12.5 删除）
+      "vectorEnabled",
+      "vectorIndexPath",
+      "embeddingModel",
+      "embeddingDtype",
+      "embeddingCacheDir",
+      "embeddingRemoteHost",
+      "chunkSize",
+      "chunkOverlap",
+      "maxChunksPerPage",
+      "retrieveTopK",
+      "retrieveMinScore",
+      "queryInstruction",
+      "embedBatchSize",
+      // 渲染文本落库（改为按需抓取后不再需要）
+      "textSyncOnChange",
+      "textApiUrl",
+      "textTableMode",
+      "textMaxLength",
+      "textSyncInterval",
+    ];
+
+    const stillThere = removed.filter((key) => all.has(key));
+    assert.deepEqual(stillThere, [], "废弃配置键应当已删除");
   });
 });

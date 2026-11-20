@@ -31,6 +31,13 @@ const MAX_TOOL_CALLS = 2;
  */
 const MIN_FUZZY_SCORE = 8;
 
+/** 关键词最多拆成几个候选（整句 + 片段），防止一次问答产生过多请求 */
+const MAX_TITLE_CANDIDATES = 3;
+/** 最多对几个候选发起 BWiki 全文检索（每次一条 list=search） */
+const MAX_TITLE_SEARCH = 2;
+/** 最多真正抓取几个候选页面（每次一条 action=parse） */
+const MAX_PAGE_FETCH = 4;
+
 /** 交给 DeepSeek 的工具声明 */
 const SEARCH_TOOL: ToolDefinition = {
   type: "function",
@@ -339,7 +346,8 @@ export class AiQueryCommands {
    * 按关键词取页面正文。
    *
    * 先解析出一串候选标题（本地拼音匹配 → wiki 全文检索 → 原样用关键词），
-   * 逐个尝试抓取，第一个拿到正文的即为结果。
+   * 逐个尝试抓取，第一个拿到正文的即为结果。抓取次数有上限：
+   * 每个候选都是一次 `action=parse`，问一句打七八个请求会让群友等上好几秒。
    */
   private async searchPage(
     keyword: string,
@@ -351,7 +359,7 @@ export class AiQueryCommands {
       return null;
     }
 
-    const titles = await this.resolveTitles(keyword);
+    const titles = (await this.resolveTitles(keyword)).slice(0, MAX_PAGE_FETCH);
     for (const title of titles) {
       const text = await wikiBot.fetchPagePlainText(title);
       if (text) {
@@ -381,7 +389,10 @@ export class AiQueryCommands {
    * 1. `wikipages` 精确标题；
    * 2. `wikipages` 拼音 / 首字母 / 前缀模糊匹配（分数门槛 8，纯首字母命中不可信）；
    * 3. BWiki 全文检索（救「高压制氧」这类不是页面名的叫法）；
-   * 4. 最后把关键词原样当标题（`redirects:true` 能吃掉重定向）。
+   * 4. 最后把候选词原样当标题（`redirects:true` 能吃掉重定向）。
+   *
+   * 候选词 = 整个关键词 + 按空格/标点拆出的片段（模型常给「电解器 耗电」这种形式）。
+   * 全文检索只对前两个候选发起，避免一次问答打出好几条 `list=search`。
    */
   private async resolveTitles(keyword: string): Promise<string[]> {
     const kw = keyword.trim();
@@ -393,20 +404,24 @@ export class AiQueryCommands {
       if (value && !titles.includes(value)) titles.push(value);
     };
 
-    // 模型偶尔给出「电解器 耗电」这种带问句成分的关键词：拆出能当标题的部分
-    const segments = kw
-      .split(/[\s，,、。？?！!：:；;“”"'（）()]+/)
-      .map((part) => part.trim())
-      .filter(Boolean);
+    const candidates: string[] = [];
+    for (const candidate of [
+      kw,
+      ...kw.split(/[\s，,、。？?！!：:；;“”"'（）()]+/),
+    ]) {
+      const value = candidate.trim();
+      if (value && !candidates.includes(value)) candidates.push(value);
+      if (candidates.length >= MAX_TITLE_CANDIDATES) break;
+    }
 
     try {
       const pages = await this.ctx.database.get("wikipages", {});
       if (pages.length > 0) {
-        for (const candidate of [kw, ...segments]) {
+        for (const candidate of candidates) {
           push(pages.find((page) => page.title === candidate)?.title);
         }
 
-        for (const candidate of [kw, ...segments]) {
+        for (const candidate of candidates) {
           const { pinyin_full, pinyin_first } = generatePinyinInfo(candidate);
           const matches = findFuzzyMatches(
             pages,
@@ -425,16 +440,24 @@ export class AiQueryCommands {
       this.log.debug(`[ai] 读取页面缓存失败：${getErrorMessage(error)}`);
     }
 
-    for (const candidate of [kw, ...segments]) {
-      const searched = (await this.ctx.wikiBot?.searchPageTitles(candidate, 1)) ?? [];
+    for (const candidate of candidates.slice(0, MAX_TITLE_SEARCH)) {
+      const searched =
+        (await this.ctx.wikiBot?.searchPageTitles(candidate, 1)) ?? [];
       push(searched[0]);
     }
-    push(kw);
+    for (const candidate of candidates) push(candidate);
     return titles;
   }
 
   // ------------------------------------------------------------ 回复与来源
 
+  /**
+   * 组装回复。
+   *
+   * QQ 的长回答会把手机屏幕顶满：官方 markdown 消息里的**代码块会折叠成一张可复制的卡片**，
+   * 因此当正文超过 `aiCodeBlockMinChars` 时整段塞进代码块，短回答仍走普通 markdown
+   * （代码块里 `•`、`**加粗**` 都不会被渲染，所以进块前会先去掉这些标记）。
+   */
   private async renderAnswer(
     session: Session | undefined,
     answer: string,
@@ -449,7 +472,13 @@ export class AiQueryCommands {
 
     if (this.renderer.isQQ(session)) {
       // QQ markdown 消息有长度上限，先截断正文再拼来源
-      let markdown = `**🤖 AI 回答**\n${truncateForQQ(answer)}`;
+      const body = truncateForQQ(answer);
+      const threshold = this.config.aiCodeBlockMinChars;
+      const asBlock = threshold > 0 && body.length >= threshold;
+      const text = asBlock ? toBlockText(body) : body;
+
+      let markdown = "**🤖 AI 回答**\n";
+      markdown += asBlock ? wrapCodeBlock(text) : text;
       if (inherited) markdown += `\n\n> ${inherited}`;
       if (visible.length > 0) {
         markdown += `\n\n---\n> 📚 **数据来源：缺氧 BWIKI**`;
@@ -641,4 +670,38 @@ function readKeyword(call: ParsedToolCall): string {
 /** QQ markdown 有长度上限：超出时截断正文，避免整条消息发不出去 */
 function truncateForQQ(text: string, max = 2000): string {
   return text.length <= max ? text : `${text.slice(0, max)}…`;
+}
+
+/**
+ * 把回答整理成「代码块里也好看」的纯文本。
+ *
+ * 代码块不渲染 markdown，`**加粗**`、`### 标题`、`- 列表` 会原样显示成符号，
+ * 因此进块前统一去掉强调标记、把列表符号换成 `•`（手机上与项目符号同形）。
+ */
+export function toBlockText(text: string): string {
+  return text
+    // 只把「### 标题」这种带空格的当标题，避免误伤「#1 号管道」
+    .replace(/^[ \t]*#{1,6}[ \t]+/gm, "")
+    .replace(/\*\*(.+?)\*\*/g, "$1")
+    .replace(/__(.+?)__/g, "$1")
+    .replace(/`([^`\n]+)`/g, "$1")
+    // 收尾：把落单的 ** 也去掉，否则卡片里会露出星号
+    .replace(/\*\*/g, "")
+    // 只把「- 」「* 」这种带空格的当列表，避免误伤「-10（范围 2 格）」这类数值
+    .replace(/^[ \t]*[-*+][ \t]+/gm, "• ")
+    .replace(/\[([^\]\n]+)\]\([^)\s]*\)/g, "$1")
+    .trim();
+}
+
+/**
+ * 用代码块包裹正文。
+ *
+ * 围栏长度按正文里最长的连续反引号决定（至少 3 个）：
+ * 模型偶尔会在回答里带 ```，固定用 3 个反引号会把围栏提前闭合、后半段漏出代码块。
+ */
+export function wrapCodeBlock(text: string): string {
+  const runs: string[] = text.match(/`+/g) ?? [];
+  const longest = runs.reduce((max, run) => Math.max(max, run.length), 0);
+  const fence = "`".repeat(Math.max(3, longest + 1));
+  return `${fence}\n${text}\n${fence}`;
 }

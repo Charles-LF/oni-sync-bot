@@ -81,139 +81,6 @@ export const ScheduleConfig: Schema<ScheduleConfig> = Schema.object({
     .default("0 2 * * *"),
 });
 
-/**
- * 渲染文本抽取相关配置。
- *
- * @deprecated 0.12.0 起 `.ai` 改为「mwn 实时抓取 + cheerio 清洗」，不再落库、不再做全量预热，
- * 本组配置已**不再被读取**。保留 schema 只是为了旧 `koishi.yml` / 旧控制台配置不报错。
- */
-export interface WikiTextConfig {
-  /** @deprecated 渲染文本不再随页面同步写入数据库 */
-  textSyncOnChange: boolean;
-  /** @deprecated api.php 地址由 mwn 客户端内置 */
-  textApiUrl?: string;
-  /** @deprecated 清洗策略已固定在代码里（保留信息框） */
-  textTableMode: "flatten" | "drop";
-  /** @deprecated 正文长度由 `fetchPagePlainText` 的 limit 控制 */
-  textMaxLength: number;
-  /** @deprecated 不再批量抓取 */
-  textSyncInterval: number;
-}
-
-export const WikiTextConfig: Schema<WikiTextConfig> = Schema.object({
-  textSyncOnChange: Schema.boolean()
-    .description("⚠️ 已废弃（0.12 起不再使用）：渲染文本不再随页面同步写入数据库")
-    .default(false),
-  textApiUrl: Schema.string()
-    .description("⚠️ 已废弃（0.12 起不再使用）：api.php 地址由 mwn 客户端内置")
-    .default(""),
-  textTableMode: Schema.union([
-    Schema.const("flatten").description(
-      "信息框抽成「标签：值」，正文表格压平成「单元格 | 单元格」（保留耗电/产热/材料等数值）",
-    ),
-    Schema.const("drop").description(
-      "丢弃全部表格（信息框里的关键数值也会一并丢失）",
-    ),
-  ])
-    .description("⚠️ 已废弃（0.12 起不再使用）：清洗策略已固定为保留信息框")
-    .default("flatten"),
-  textMaxLength: Schema.natural()
-    .description("⚠️ 已废弃（0.12 起不再使用）：AI 取正文时固定截断 3000 字")
-    .default(20000),
-  textSyncInterval: Schema.natural()
-    .description("⚠️ 已废弃（0.12 起不再使用）：不再批量抓取渲染文本")
-    .default(300),
-});
-
-/**
- * 旧的本地向量检索配置。
- *
- * @deprecated 0.12.0 起 `.ai` 改为 Function Calling + mwn 实时抓取，vectra 与
- * transformers.js 已从依赖中移除。键位**全部保留**，避免旧配置在控制台报「未知字段」，
- * 但代码里不再读取任何一项。
- */
-export interface VectorConfig {
-  /** @deprecated 向量检索已移除 */
-  vectorEnabled: boolean;
-  /** @deprecated 向量检索已移除 */
-  vectorIndexPath: string;
-  /** @deprecated 向量检索已移除 */
-  embeddingModel: string;
-  /** @deprecated 向量检索已移除 */
-  embeddingDtype: "fp32" | "q8" | "fp16" | "q4";
-  /** @deprecated 向量检索已移除 */
-  embeddingCacheDir: string;
-  /** @deprecated 向量检索已移除 */
-  embeddingRemoteHost: string;
-  /** @deprecated 向量检索已移除 */
-  chunkSize: number;
-  /** @deprecated 向量检索已移除 */
-  chunkOverlap: number;
-  /** @deprecated 向量检索已移除 */
-  maxChunksPerPage: number;
-  /** @deprecated 向量检索已移除 */
-  retrieveTopK: number;
-  /** @deprecated 向量检索已移除 */
-  retrieveMinScore: number;
-  /** @deprecated 向量检索已移除 */
-  queryInstruction: string;
-  /** @deprecated 向量检索已移除 */
-  embedBatchSize: number;
-}
-
-export const VectorConfig: Schema<VectorConfig> = Schema.object({
-  vectorEnabled: Schema.boolean()
-    .description("⚠️ 已废弃（0.12 起不再使用）：检索已改为 Function Calling")
-    .default(false),
-  vectorIndexPath: Schema.string()
-    .description("⚠️ 已废弃（0.12 起不再使用）：不再生成向量索引")
-    .default("data/oni-vector"),
-  embeddingModel: Schema.string()
-    .description("⚠️ 已废弃（0.12 起不再使用）：不再本地推理")
-    .default("Xenova/bge-small-zh-v1.5"),
-  embeddingDtype: Schema.union([
-    Schema.const("q8").description("8bit 量化"),
-    Schema.const("fp32").description("全精度"),
-    Schema.const("fp16").description("半精度"),
-    Schema.const("q4").description("4bit 量化"),
-  ])
-    .description("⚠️ 已废弃（0.12 起不再使用）")
-    .default("q8"),
-  embeddingCacheDir: Schema.string()
-    .description("⚠️ 已废弃（0.12 起不再使用）：不再下载模型，可删除该目录")
-    .default("data/oni-models"),
-  embeddingRemoteHost: Schema.string()
-    .description("⚠️ 已废弃（0.12 起不再使用）")
-    .default("https://hf-mirror.com"),
-  chunkSize: Schema.natural()
-    .description("⚠️ 已废弃（0.12 起不再使用）")
-    .default(350)
-    .min(80),
-  chunkOverlap: Schema.natural()
-    .description("⚠️ 已废弃（0.12 起不再使用）")
-    .default(60),
-  maxChunksPerPage: Schema.natural()
-    .description("⚠️ 已废弃（0.12 起不再使用）")
-    .default(16)
-    .min(1),
-  retrieveTopK: Schema.natural()
-    .description("⚠️ 已废弃（0.12 起不再使用）")
-    .default(5)
-    .min(1),
-  retrieveMinScore: Schema.number()
-    .description("⚠️ 已废弃（0.12 起不再使用）")
-    .default(0.2)
-    .min(0)
-    .max(1),
-  queryInstruction: Schema.string()
-    .description("⚠️ 已废弃（0.12 起不再使用）")
-    .default("为这个句子生成表示以用于检索相关文章："),
-  embedBatchSize: Schema.natural()
-    .description("⚠️ 已废弃（0.12 起不再使用）")
-    .default(4)
-    .min(1),
-});
-
 /** DeepSeek 问答 */
 export interface AiConfig {
   aiEnabled: boolean;
@@ -228,6 +95,7 @@ export interface AiConfig {
   aiMemoryTurns: number;
   aiMemoryTtl: number;
   aiChannelMemory: boolean;
+  aiCodeBlockMinChars: number;
 }
 
 export const AiConfig: Schema<AiConfig> = Schema.object({
@@ -271,6 +139,12 @@ export const AiConfig: Schema<AiConfig> = Schema.object({
       "允许群内承接话题：用户自己没提问记录时，用群里上一条问答的语境回答「那它…」这类追问",
     )
     .default(true),
+  aiCodeBlockMinChars: Schema.natural()
+    .description(
+      "QQ 下回答超过这么多字时塞进代码块（折叠成可复制卡片，避免手机端刷屏）；0 表示始终不用代码块",
+    )
+    .default(180)
+    .max(2000),
 });
 
 /**
@@ -282,8 +156,6 @@ export interface Config
     SiteConfig,
     NotifyConfig,
     ScheduleConfig,
-    WikiTextConfig,
-    VectorConfig,
     AiConfig {}
 
 export const Config: Schema<Config> = Schema.intersect([
@@ -291,7 +163,5 @@ export const Config: Schema<Config> = Schema.intersect([
   SiteConfig,
   NotifyConfig,
   ScheduleConfig,
-  WikiTextConfig,
-  VectorConfig,
   AiConfig,
 ] as const);

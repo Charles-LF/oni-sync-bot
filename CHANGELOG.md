@@ -19,6 +19,50 @@
 
 ---
 
+## [0.12.5] — 2026-11-20
+
+> 收尾清理：把 0.12.0 起已废弃但为兼容旧配置保留的键位彻底删掉，并给关键词解析加上请求数上限。
+
+### Removed
+
+- 删除整组**向量检索配置**（`VectorConfig`）：`vectorEnabled`、`vectorIndexPath`、`embeddingModel`、
+  `embeddingDtype`、`embeddingCacheDir`、`embeddingRemoteHost`、`chunkSize`、`chunkOverlap`、
+  `maxChunksPerPage`、`retrieveTopK`、`retrieveMinScore`、`queryInstruction`、`embedBatchSize`
+- 删除整组**渲染文本落库配置**（`WikiTextConfig`）：`textSyncOnChange`、`textApiUrl`、`textTableMode`、
+  `textMaxLength`、`textSyncInterval`
+  - 配置项从 42 个减少到 24 个，控制台不再显示一堆「⚠️ 已废弃」的空字段；
+  - 旧 `koishi.yml` 里残留这些键**不会报错**（schema 中已无这些键，程序也不再读取任何一项），可以顺手删掉；
+  - 新增 `tests/config.spec.ts` 用例锁定这批键不再出现
+- 删除 `QueryCommands` 里从不读取的 `ctx` 字段、`findPreciseMatch()` 的两个未使用参数，
+  以及 `routeRedirect` 里未使用的 `next` 参数
+
+### Changed
+
+- 关键词解析（`resolveTitles`）加上请求数上限，避免长关键词把一次问答拖成七八个请求：
+  候选词最多 3 个（整句 + 按空格/标点拆出的片段）、BWiki 全文检索最多 2 次、正文抓取最多 4 次
+- 不再对每个片段都发起 `list=search`：只有前两个候选会走全文检索，其余靠本地精确/拼音匹配
+
+---
+
+## [0.12.1] — 2026-11-20
+
+### Added
+
+- 新配置 `aiCodeBlockMinChars`（默认 `180`）：QQ 下回答超过该字数时整段塞进代码块。
+  QQ 的 markdown 消息会把代码块渲染成一张可复制的卡片，手机端不再被长回答刷屏；
+  设为 `0` 可恢复「所有回答都用普通 markdown」
+
+### Changed
+
+- `.ai` 的 QQ 回复按长度二选一：短回答保持 `**加粗**` + `•` 列表的普通 markdown，
+  长回答进代码块；`💭 承接群内上一问` 与 `📚 数据来源` 始终留在代码块外
+- 进代码块前会把正文里的 markdown 标记转成纯文本（`**粗体**` → `粗体`、`### 标题` → `标题`、
+  `- 列表` → `• 列表`、`[文字](链接)` → `文字`），因为代码块里这些标记不会被渲染
+- 代码块围栏长度按正文中最长的连续反引号动态决定（至少三个），
+  避免模型输出里自带三个反引号时把围栏提前闭合
+
+---
+
 ## [0.12.0] — 2026-11-20
 
 > **破坏性变更**：`.ai` 不再使用本地向量检索，改为 DeepSeek Function Calling + mwn 实时抓取正文。
@@ -277,7 +321,9 @@
 - 页面拼音查询与模糊搜索命令
 - 定时任务（基于 `koishi-plugin-cron`）
 
-[Unreleased]: https://github.com/Charles-lf/oni-sync-bot/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/Charles-lf/oni-sync-bot/compare/v0.12.5...HEAD
+[0.12.5]: https://github.com/Charles-lf/oni-sync-bot/releases/tag/v0.12.5
+[0.12.1]: https://github.com/Charles-lf/oni-sync-bot/releases/tag/v0.12.1
 [0.12.0]: https://github.com/Charles-lf/oni-sync-bot/releases/tag/v0.12.0
 [0.11.0]: https://github.com/Charles-lf/oni-sync-bot/releases/tag/v0.11.0
 [0.10.1]: https://github.com/Charles-lf/oni-sync-bot/releases/tag/v0.10.1

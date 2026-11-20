@@ -40,6 +40,8 @@
 - **防幻觉** — 第 2 轮把正文以 `role:'tool'` 回填，提示词要求「严格且仅根据资料回答」
 - **强制检索** — 模型试图凭记忆作答时，程序会用 `tool_choice` 逼它再检索一次
 - **追问** — 自己最近 2 轮问答会被带进上下文；开启 `aiChannelMemory` 时，别人刚问过的题目也能承接
+- **长回答折叠** — QQ 下回答超过 `aiCodeBlockMinChars`（默认 180 字）时整段塞进代码块，
+  渲染成一张可复制的卡片，手机端不再刷屏；短回答仍走普通 markdown
 
 > Wikitext 源码**只**用于同步，永远不会进入 AI 链路。AI 只看到渲染后的纯文本。
 > 正文按页缓存 10 分钟（最多 50 页），群里反复问同一页不会重复请求 bwiki。
@@ -97,7 +99,7 @@ npm uninstall vectra @huggingface/transformers   # 0.12.0 起不再需要
 
 ## ⚙️ 配置项
 
-配置 schema 的**唯一声明处**是 [`src/config.ts`](src/config.ts)，分为四个分组：账号、站点、通知、定时任务。
+配置 schema 的**唯一声明处**是 [`src/config.ts`](src/config.ts)，分为五个分组：账号、站点、通知、定时任务、AI 问答。
 
 | 参数                | 分组 | 说明                                     | 默认值                         |
 | ------------------- | ---- | ---------------------------------------- | ------------------------------ |
@@ -131,13 +133,14 @@ npm uninstall vectra @huggingface/transformers   # 0.12.0 起不再需要
 | `aiMemoryTurns`       | AI   | 追问记忆保留的轮数（0 = 关闭）                                | `2`                        |
 | `aiMemoryTtl`         | AI   | 追问记忆过期时间（秒），超时视为新话题                        | `600`                      |
 | `aiChannelMemory`     | AI   | 群内话题承接：别人刚问过，自己接着问也能懂「那它…」            | `true`                     |
+| `aiCodeBlockMinChars` | AI   | QQ 下回答超过这么多字就塞进代码块（`0` = 始终不用）            | `180`                      |
 
-> **已废弃（0.12.0 起不再读取，仅为兼容旧配置保留键位）**：
+> **已删除的配置（0.12.5 起 schema 中不再存在）**：
 > `textSyncOnChange`、`textApiUrl`、`textTableMode`、`textMaxLength`、`textSyncInterval`，
 > 以及整组向量配置 `vectorEnabled`、`vectorIndexPath`、`embeddingModel`、`embeddingDtype`、
 > `embeddingCacheDir`、`embeddingRemoteHost`、`chunkSize`、`chunkOverlap`、`maxChunksPerPage`、
 > `retrieveTopK`、`retrieveMinScore`、`queryInstruction`、`embedBatchSize`。
-> 控制台里它们仍会显示，改动不会产生任何效果，可以直接删掉。
+> 旧 `koishi.yml` 里残留这些键不会报错（schema 中已无这些键，程序也不再读取），但控制台不会再显示，可以放心删掉。
 
 > **默认值形同虚设**：账号默认值是 `1`，必须改成真实账号，否则登录一定失败。
 
@@ -169,6 +172,11 @@ npm uninstall vectra @huggingface/transformers   # 0.12.0 起不再需要
 >
 > 记忆会**落库**（`oniaimemory` 表），Koishi 重启、热重载后依然能承接上一问；过期行按 `aiMemoryTtl` 自动清理。
 > `aiMemoryTurns=0` 可整体关闭。
+>
+> **长回答不刷屏**：QQ 的 markdown 消息里，代码块会渲染成一张可复制的卡片。因此回答超过
+> `aiCodeBlockMinChars`（默认 180 字）时整段放进代码块，正文里的 `**加粗**`、`### 标题`、
+> `- 列表` 会先被换成 `•` 之类的纯文本（代码块不渲染 markdown），承接标注与数据来源留在块外。
+> 想让所有回答都用普通 markdown，把它设为 `0`。
 
 ### 🧠 2G 内存够不够
 
@@ -275,8 +283,8 @@ npm uninstall vectra @huggingface/transformers   # 0.12.0 起不再需要
 
 `wikipages` / `oniaimemory` 通过 `Tables` 接口增强声明（见 `databaseExtension.ts`）；`onitodos` 目前**没有**做接口增强。
 
-> 0.12.0 起不再维护 `wikitexts` 表（渲染文本改为按需抓取）。旧库里的这张表不会被删除，
-> 但也**不会再被读写**，可以自行 `DROP TABLE wikitexts` 回收空间。
+> 0.12.0 起不再维护 `wikitexts` 表（渲染文本改为按需抓取），0.12.5 起连表声明也移除了。
+> 旧库里的这张表不会被自动删除，但插件**不会再读写它**，可以自行 `DROP TABLE wikitexts` 回收空间。
 
 ## 🎨 控制台界面
 
@@ -293,7 +301,7 @@ npm uninstall vectra @huggingface/transformers   # 0.12.0 起不再需要
 ```
 src/
 ├── index.ts                  # 组合根：SUB_PLUGINS 注册表 + 控制台入口
-├── config.ts                 # 配置的唯一声明处（账号 / 站点 / 通知 / 定时 / AI；旧的向量组已废弃）
+├── config.ts                 # 配置的唯一声明处（账号 / 站点 / 通知 / 定时 / AI）
 ├── services/
 │   ├── wikiBotService.ts     # wikiBot 服务：登录、代理、透明重登录、fetchPagePlainText
 │   ├── aiService.ts          # DeepSeek 客户端（Function Calling）+ 两套提示词

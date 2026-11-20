@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
-import { AiQueryCommands } from "../src/plugins/aiQueryCommands";
+import {
+  AiQueryCommands,
+  toBlockText,
+  wrapCodeBlock,
+} from "../src/plugins/aiQueryCommands";
 import { generatePinyinInfo } from "../src/utils/tools";
 import type {
   AgentMessage,
@@ -54,6 +58,7 @@ function createPlugin(options: Options) {
   const plugin = Object.create(AiQueryCommands.prototype) as any;
   const completeCalls: Array<{ messages: AgentMessage[]; opts: any }> = [];
   const fetched: string[] = [];
+  const searched: string[] = [];
 
   plugin.config = { aiMemoryTurns: 0 };
   plugin.log = { info() {}, warn() {}, debug() {}, error() {} };
@@ -76,7 +81,10 @@ function createPlugin(options: Options) {
     },
     wikiBot: {
       isBWikiBotReady: () => true,
-      searchPageTitles: async () => options.searched ?? [],
+      searchPageTitles: async (keyword: string) => {
+        searched.push(keyword);
+        return options.searched ?? [];
+      },
       fetchPagePlainText: async (title: string) => {
         fetched.push(title);
         return options.pages?.[title] ?? null;
@@ -84,7 +92,7 @@ function createPlugin(options: Options) {
     },
   };
 
-  return { plugin, completeCalls, fetched };
+  return { plugin, completeCalls, fetched, searched };
 }
 
 function toolMessages(messages: AgentMessage[]) {
@@ -294,8 +302,22 @@ describe("plugins/aiQueryCommands Agent 调度", () => {
     assert.deepEqual(result.pages, ["电解器"]);
   });
 
-  it("同一页面被检索两次时，来源不重复", async () => {
-    const { plugin } = createPlugin({
+  it("关键词很长时，抓取与全文检索的次数都有上限", async () => {
+    const { plugin, fetched, searched } = createPlugin({
+      decisions: [
+        plan([toolCall("c1", "电解器 耗电 瓦数 过热 气压")]),
+        final("抱歉，资料中未提及相关信息。"),
+      ],
+      pages: {},
+    });
+
+    await plugin.runAgent("电解器耗电多少", []);
+
+    assert.ok(fetched.length <= 4, `实际抓取 ${fetched.length} 次：${fetched.join(",")}`);
+    assert.ok(searched.length <= 2, `实际检索 ${searched.length} 次：${searched.join(",")}`);
+  });
+
+  it("同一页面被检索两次时，来源不重复", async () => {    const { plugin } = createPlugin({
       decisions: [
         plan([toolCall("c1", "电解器"), toolCall("c2", "电解器")]),
         final("耗电 120 瓦。"),
@@ -326,5 +348,135 @@ describe("plugins/aiQueryCommands Agent 调度", () => {
     await plugin.runAgent("dianjieqi 耗电多少", []);
 
     assert.ok(fetched.includes("电解器"), `实际抓取：${fetched.join(",")}`);
+  });
+});
+
+describe("plugins/aiQueryCommands 回复渲染", () => {
+  /** QQ 场景：renderer.send 直接回传 markdown，方便断言 */
+  function createRendererPlugin(threshold: number) {
+    const plugin = Object.create(AiQueryCommands.prototype) as any;
+    plugin.config = { aiCodeBlockMinChars: threshold };
+    plugin.renderer = {
+      isQQ: () => true,
+      send: async (_session: unknown, markdown: string) => markdown,
+    };
+    return plugin;
+  }
+
+  const SOURCES = [
+    { title: "电解器", url: "https://wiki.biligame.com/oni/电解器" },
+  ];
+  const SHORT = "电解器耗电 120 瓦。";
+  const LONG = Array.from(
+    { length: 8 },
+    (_, i) => `• 第 ${i + 1} 条：电解器在气压达到 1800 克时停止工作。`,
+  ).join("\n");
+
+  it("短回答保持普通 markdown（不进代码块）", async () => {
+    const plugin = createRendererPlugin(180);
+    const markdown = await plugin.renderAnswer(undefined, SHORT, SOURCES);
+
+    assert.ok(markdown.includes(SHORT));
+    assert.ok(!markdown.includes("```"), markdown);
+    assert.ok(markdown.includes("数据来源：缺氧 BWIKI"));
+  });
+
+  it("长回答塞进代码块，避免手机端刷屏", async () => {
+    const plugin = createRendererPlugin(180);
+    const markdown = await plugin.renderAnswer(undefined, LONG, SOURCES);
+
+    assert.ok(markdown.startsWith("**🤖 AI 回答**\n```"), markdown);
+    assert.ok(markdown.includes(LONG), "正文必须完整保留");
+    // 代码块必须闭合在来源之前
+    const fenceCount = (markdown.match(/```/g) ?? []).length;
+    assert.equal(fenceCount, 2, markdown);
+    assert.ok(markdown.indexOf("数据来源") > markdown.lastIndexOf("```"));
+    assert.ok(markdown.includes("[电解器](https://wiki.biligame.com/oni/电解器)"));
+  });
+
+  it("阈值为 0 时始终不用代码块", async () => {
+    const plugin = createRendererPlugin(0);
+    const markdown = await plugin.renderAnswer(undefined, LONG, SOURCES);
+    assert.ok(!markdown.includes("```"), markdown);
+  });
+
+  it("「资料未提及」时不列来源，且长文本仍按阈值处理", async () => {
+    const plugin = createRendererPlugin(180);
+    const markdown = await plugin.renderAnswer(
+      undefined,
+      `抱歉，资料中未提及相关信息。${LONG}`,
+      SOURCES,
+    );
+
+    assert.ok(markdown.includes("```"));
+    assert.ok(!markdown.includes("🔗"), markdown);
+    assert.ok(markdown.includes("数据来源：缺氧 BWIKI"));
+  });
+
+  it("承接群内上一问的标注留在代码块外面", async () => {
+    const plugin = createRendererPlugin(180);
+    const markdown = await plugin.renderAnswer(
+      undefined,
+      LONG,
+      SOURCES,
+      "电解器耗电多少",
+    );
+
+    assert.ok(markdown.includes("💭 承接群内上一问：电解器耗电多少"));
+    assert.ok(
+      markdown.indexOf("💭") > markdown.lastIndexOf("```"),
+      "标注不应被裹进代码块",
+    );
+  });
+
+  describe("toBlockText", () => {
+    it("去掉 markdown 强调标记（代码块里不会渲染）", () => {
+      assert.equal(
+        toBlockText("**耗电**：120 瓦，__产热__ 1 千复制热/秒"),
+        "耗电：120 瓦，产热 1 千复制热/秒",
+      );
+    });
+
+    it("列表符号统一成 •，标题去掉 #", () => {
+      assert.equal(
+        toBlockText("### 机制\n- 第一步\n* 第二步"),
+        "机制\n• 第一步\n• 第二步",
+      );
+    });
+
+    it("行内链接只留文字", () => {
+      assert.equal(
+        toBlockText("见[电解器](https://example.com/a)页面"),
+        "见电解器页面",
+      );
+    });
+
+    it("保留正文里的数值与换行", () => {
+      assert.equal(toBlockText("• 电力：120 瓦\n• 产热：1 千复制热/秒"), "• 电力：120 瓦\n• 产热：1 千复制热/秒");
+    });
+
+    it("不误伤以「-10」「#1」开头的数值（只把带空格的形式当列表/标题）", () => {
+      assert.equal(
+        toBlockText("-10（范围：2 格）\n#1 号管道"),
+        "-10（范围：2 格）\n#1 号管道",
+      );
+    });
+
+    it("落单的 ** 也会被清掉", () => {
+      assert.equal(toBlockText("**耗电 120 瓦"), "耗电 120 瓦");
+    });
+  });
+
+  describe("wrapCodeBlock", () => {
+    it("普通正文用三个反引号", () => {
+      assert.equal(wrapCodeBlock("abc"), "```\nabc\n```");
+    });
+
+    it("正文自带 ``` 时改用更长围栏，避免提前闭合", () => {
+      const wrapped = wrapCodeBlock("代码：\n```js\nx\n```");
+      assert.ok(wrapped.startsWith("````\n"), wrapped);
+      assert.ok(wrapped.endsWith("\n````"), wrapped);
+      assert.ok(wrapped.includes("```js"));
+    });
   });
 });
