@@ -1,32 +1,23 @@
 import { load } from "cheerio";
 
 /**
- * HTML → 纯文本。
+ * HTML → 纯文本（纯函数，不发请求）。
  *
- * 这里只放**纯函数**：不依赖 Koishi Context、不发请求，因此可以被单元测试直接覆盖
- * （见 tests/renderText.spec.ts）。
- *
- * 输入是 MediaWiki `action=parse&prop=text` 的渲染结果（模板、模块已展开），
- * 由 `WikiBotService.fetchPagePlainText` 调用。
- *
- * 表格策略（针对 bwiki 的实际结构）：
- * - **信息框 `.infobox` 必须保留**：耗电、温度、尺寸、建筑血量这些数值只在信息框里，
- *   直接删掉等于把答案删了。这里把它抽成 `标签：值` 的文本行；
- * - 正文数据表压平成 `单元格 | 单元格` 的行；
- * - 导航框 / 目录 / 脚本 / 脚注标记等确实的噪音才丢弃；
- * - 想完全按「剔除所有表格」处理时把 `tableMode` 设为 `"drop"`。
+ * 输入是 `action=parse&prop=text` 的渲染结果。表格策略：
+ * 信息框 `.infobox` 抽成「标签：值」保留（数值全在里面），正文表格压平，
+ * 导航框/目录/脚本丢弃；`tableMode:'drop'` 可整表丢弃（会丢数值）。
  */
 
 export type TableMode = "flatten" | "drop";
 
 export interface ExtractTextOptions {
-  /** 表格处理方式，默认 `"flatten"`（压平保留数值） */
+  /** 表格处理方式，默认 `flatten`（压平保留数值） */
   tableMode?: TableMode;
-  /** 最大保留字数，0 或省略表示不限制 */
+  /** 最大字数，0 或省略表示不限制 */
   maxLength?: number;
 }
 
-/** 一律丢弃的元素：脚本、样式、编辑链接、导航框、目录、脚注标记等（信息框要保留！） */
+/** 一律丢弃的元素（信息框要保留） */
 const NOISE_SELECTOR = [
   "script",
   "style",
@@ -67,13 +58,10 @@ const NOISE_TABLE_SELECTOR = [
 const BLOCK_SELECTOR = "h1,h2,h3,h4,h5,h6,p,li,dt,dd,blockquote,pre";
 
 /**
- * 把信息框抽成「标签：值」的文本行。
+ * 信息框 → 「标签：值」行。
  *
- * bwiki 的建筑信息框实际结构是：外层 `table.infobox`，里面既有
- * `th.infobox-th + td.infobox-td` 的普通键值行（ID / 尺寸 / 建筑血量…），
- * 也有嵌套的 `table.infobox-group`（效果 / 数据…），其单元格里是
- * `div.infobox-group-child`（`div.infobox-th` 标签 + `div.infobox-td` 值）。
- * 这些数值（耗电、产热、材料）正是 AI 最需要的东西，必须完整保留。
+ * 结构：`th.infobox-th + td.infobox-td` 是普通键值行，
+ * 嵌套的 `table.infobox-group` 里用 `div.infobox-group-child` 分组（效果/建造…）。
  */
 function flattenInfobox(
   $: ReturnType<typeof load>,

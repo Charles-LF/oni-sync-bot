@@ -1,24 +1,15 @@
-/** 一轮短期记忆：问题、回答，以及当轮查过的页面（供追问时兜底复用） */
+/** 一轮短期记忆：问题、回答，以及当轮查过的页面（供追问兜底） */
 export interface MemoryTurn {
   question: string;
   answer: string;
-  /** 这一轮实际检索到的页面标题；留空表示没查到（旧版本存的是 `chunks`，运行时忽略） */
+  /** 这一轮检索到的页面标题；空表示没查到 */
   page?: string;
   at: number;
 }
 
 /**
- * `.ai` 的短期记忆（内存 Map，由调用方负责落库）。
- *
- * 为什么需要它：`ai 电解器耗电多少` 之后接一句「那它能干什么」，
- * 模型看不到上一问就无从知道「它」指谁。
- *
- * 边界约定：
- * - `maxTurns <= 0` 表示关闭记忆；
- * - 每轮超过 `ttlMs` 视为新话题（默认 10 分钟），避免很早之前的问答污染当前问题；
- * - 每个键（平台:频道:用户 / topic:平台:频道）只保留最近 `maxTurns` 轮；
- * - 本类**不直接读写数据库**：重启后的恢复由 `AiMemory.restore()` + 调用方的
- *   `loadMemory()` 完成（`oniaimemory` 表），这样纯函数部分可以单测。
+ * `.ai` 的短期记忆（内存 Map，落库由调用方负责）。
+ * `maxTurns <= 0` 关闭；超过 `ttlMs` 视为新话题；重启恢复靠 `restore()`。
  */
 export class AiMemory {
   private readonly store = new Map<string, MemoryTurn[]>();
@@ -49,11 +40,7 @@ export class AiMemory {
     return fresh;
   }
 
-  /**
-   * 用外部来源（数据库）恢复某个键的记忆。
-   *
-   * 重启后内存为空，由调用方从库里读出来灌回内存；同样会做 TTL 与轮数裁剪。
-   */
+  /** 从数据库恢复某个键的记忆（重启后内存为空时用），同样做 TTL 与轮数裁剪 */
   restore(key: string, turns: MemoryTurn[]): MemoryTurn[] {
     if (!key || !this.enabled || turns.length === 0) return [];
     const fresh = this.prune(turns).slice(-this.maxTurns);
@@ -85,7 +72,7 @@ export class AiMemory {
     return turns.filter((turn) => now - turn.at <= this.ttlMs);
   }
 
-  /** 防止长期运行下 Map 无限增长：清理已过期的键 */
+  /** 防止长期运行下 Map 无限膨胀：清掉过期的键 */
   private evictStale(): void {
     if (this.ttlMs <= 0) return;
     const now = this.now();
@@ -96,12 +83,7 @@ export class AiMemory {
   }
 }
 
-/**
- * 决定这一问使用哪段上下文。
- *
- * 优先级：**自己的历史** > **群内上一轮**（可关闭）> 单轮问答。
- * 自己的历史优先，避免用户正在聊 A 时被群里刚聊过的 B 带偏。
- */
+/** 选上下文：自己的历史 > 群内上一轮（可关闭）> 单轮 */
 export function pickContext(
   own: MemoryTurn[],
   shared: MemoryTurn[],

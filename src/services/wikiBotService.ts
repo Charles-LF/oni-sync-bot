@@ -38,13 +38,13 @@ export class WikiBotService extends Service {
   private static readonly MAX_RETRIES = 3;
   private static readonly RETRY_DELAY = 5000;
 
-  /** 取给 AI 的正文时默认截断到这么多字（提示词不需要整页，电解器整页也才 3000 字） */
+  /** 给 AI 的正文默认截断长度 */
   private static readonly PAGE_TEXT_LIMIT = 3000;
-  /** 正文缓存 TTL：群里反复问同一页时不必重复请求 bwiki（WAF 会限流） */
+  /** 正文缓存：TTL + 条目上限（bwiki 有 WAF 限流，同页不重复请求） */
   private static readonly PAGE_TEXT_TTL = 10 * 60 * 1000;
   private static readonly PAGE_TEXT_CACHE_SIZE = 50;
 
-  /** `小写标题 → 正文`，只缓存抽好的纯文本（约 3 KB/页，50 页 ≈ 150 KB） */
+  /** 小写标题 → 正文（约 3 KB/页） */
   private readonly pageTextCache = new Map<
     string,
     { text: string; at: number }
@@ -254,18 +254,9 @@ export class WikiBotService extends Service {
   // ------------------------------------------------------- 渲染文本（供 AI 使用）
 
   /**
-   * 取某个页面的**渲染后纯文本**（模板、模块已展开，不是 wikitext 源码）。
-   *
-   * 为什么用 `parseTitle`：它就是 `action=parse&page=…&prop=text` 的封装
-   * （见 mwn `build/bot.js`），返回 `parse.text` 即渲染后的 HTML；并且调用会经过
-   * `createReloginAwareProxy`，登录态过期时自动重登并重放，不需要调用方关心。
-   *
-   * 清洗**不删 `<table>`**：bwiki 的信息框本身就是 `table.infobox`，耗电、产热、尺寸、
-   * 建筑材料全在里面。实测「氧石精炼炉」删表后只剩 586 字且无任何数值，保留信息框
-   * 则有 877 字并含 `电力：消耗 1200 瓦`。因此统一交给 `extractPlainText`：
-   * 信息框抽成「标签：值」、正文表格压平、只丢 navbox / 目录 / 脚本等噪音。
-   *
-   * 页面不存在、bwiki 未登录、网络失败都返回 `null`——调用方只判断 null，不需要 try/catch。
+   * 取页面**渲染后**的纯文本（`parseTitle`，经 relogin 代理自动重登）。
+   * 清洗**不删 `<table>`**：信息框就是 `table.infobox`，数值全在里面。
+   * 页面不存在 / 未登录 / 网络失败一律返回 `null`。
    */
   async fetchPagePlainText(
     title: string,
@@ -324,12 +315,7 @@ export class WikiBotService extends Service {
     return text;
   }
 
-  /**
-   * 用 MediaWiki 全文检索把关键词换成页面标题。
-   *
-   * 用于「高压制氧」「Electrolyzer」这类本地拼音匹配不上的叫法：
-   * AI 给的 keyword 未必是页面标题，先让 wiki 自己找一次，比直接 404 友好。
-   */
+  /** wiki 全文检索 → 页面标题；救「高压制氧」这类不是页面名的叫法 */
   async searchPageTitles(keyword: string, limit = 1): Promise<string[]> {
     const term = keyword.trim();
     if (!term || !this.isBWikiBotReady()) return [];

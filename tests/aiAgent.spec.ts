@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
 import {
   AiQueryCommands,
+  isPureFollowUp,
+  residualSubject,
   toBlockText,
   wrapCodeBlock,
 } from "../src/plugins/aiQueryCommands";
+import { AiMemory } from "../src/services/aiMemory";
 import { generatePinyinInfo } from "../src/utils/tools";
 import type {
   AgentMessage,
@@ -260,6 +263,88 @@ describe("plugins/aiQueryCommands Agent 调度", () => {
 
     assert.ok(fetched.includes("电解器"));
     assert.deepEqual(result!.pages, ["电解器"]);
+    // 真的沿用了上一轮页面 → 标注承接
+    assert.equal(result!.reusedPage, "电解器");
+  });
+
+  it("问的是新词条且该页不存在时，不得拿上一轮的页面顶替", async () => {
+    const { plugin, fetched } = createPlugin({
+      decisions: [
+        plan([toolCall("c1", "水泵")]),
+        final("抱歉，资料中未提及相关信息。"),
+      ],
+      // 水泵没有正文；氧石精炼炉有
+      pages: { 氧石精炼炉: "氧石精炼炉正文" },
+      pageList: ["氧石精炼炉"],
+    });
+
+    const turns = [
+      {
+        question: "氧石精炼炉是什么",
+        answer: "一种精炼建筑。",
+        page: "氧石精炼炉",
+        at: Date.now(),
+      },
+    ];
+    const result = await plugin.runAgent("水泵有什么用", turns);
+
+    assert.equal(
+      fetched.includes("氧石精炼炉"),
+      false,
+      `不该用上一轮的页面回答新问题，实际抓取：${fetched.join(",")}`,
+    );
+    assert.deepEqual(result!.pages, []);
+    assert.deepEqual(result!.sources, []);
+    assert.equal(result!.reusedPage, undefined);
+  });
+
+  it("关键词里点名了上一轮页面时，仍算追问（可沿用）", async () => {
+    const { plugin, fetched } = createPlugin({
+      decisions: [
+        plan([toolCall("c1", "氧石精炼炉 材料")]),
+        final("需要金 100 千克。"),
+      ],
+      pages: { 氧石精炼炉: "氧石精炼炉正文" },
+      pageList: ["氧石精炼炉"],
+    });
+
+    const turns = [
+      {
+        question: "氧石精炼炉是什么",
+        answer: "一种精炼建筑。",
+        page: "氧石精炼炉",
+        at: Date.now(),
+      },
+    ];
+    await plugin.runAgent("那它的材料呢", turns);
+
+    assert.ok(fetched.includes("氧石精炼炉"));
+  });
+
+  it("历史里答「未提及」的轮次不回放给模型（避免带偏）", async () => {
+    const { plugin, completeCalls } = createPlugin({
+      decisions: [plan([toolCall("c1", "电解器")]), final("120 瓦。")],
+      pages: { 电解器: "电解器正文" },
+      pageList: ["电解器"],
+    });
+
+    await plugin.runAgent("电解器耗电多少", [
+      {
+        question: "电解器能飞吗",
+        answer: "抱歉，资料中未提及相关信息。",
+        page: "电解器",
+        at: 1,
+      },
+      { question: "电解器是什么", answer: "制氧建筑。", page: "电解器", at: 2 },
+    ]);
+
+    const roles = completeCalls[0].messages.map((m) => m.role);
+    assert.deepEqual(roles, ["system", "user", "assistant", "user"]);
+    assert.equal(
+      (completeCalls[0].messages[1] as { content: string }).content,
+      "电解器是什么",
+      "「未提及」的轮次应被跳过",
+    );
   });
 
   it("多轮历史按 user/assistant 交替回放，且资料不进 system", async () => {
@@ -348,6 +433,46 @@ describe("plugins/aiQueryCommands Agent 调度", () => {
     await plugin.runAgent("dianjieqi 耗电多少", []);
 
     assert.ok(fetched.includes("电解器"), `实际抓取：${fetched.join(",")}`);
+  });
+});
+
+describe("plugins/aiQueryCommands 追问判定", () => {
+  describe("residualSubject", () => {
+    it("纯属性/指代词剔完什么都不剩", () => {
+      assert.equal(residualSubject("耗电多少"), "");
+      assert.equal(residualSubject("那它耗电多少"), "");
+      assert.equal(residualSubject("它能干什么"), "");
+      assert.equal(residualSubject("建筑材料"), "");
+      assert.equal(residualSubject("过热温度"), "");
+    });
+
+    it("带实体的问句剔完还剩词条名", () => {
+      assert.equal(residualSubject("水泵有什么用"), "水泵");
+      assert.equal(residualSubject("氧石精炼炉怎么用"), "氧石精炼炉");
+      assert.equal(residualSubject("电解器和气泵哪个费电"), "电解器气泵");
+    });
+  });
+
+  describe("isPureFollowUp", () => {
+    it("没有主语的问题算追问（可沿用上一轮）", () => {
+      assert.equal(isPureFollowUp("耗电多少", "电解器"), true);
+      assert.equal(isPureFollowUp("那它能干什么", "电解器"), true);
+      assert.equal(isPureFollowUp("", "电解器"), true);
+    });
+
+    it("点名上一轮页面算追问", () => {
+      assert.equal(isPureFollowUp("电解器的材料", "电解器"), true);
+    });
+
+    it("带新实体的问题不算追问", () => {
+      assert.equal(isPureFollowUp("水泵有什么用", "氧石精炼炉"), false);
+      assert.equal(isPureFollowUp("氧石精炼炉怎么用", "电解器"), false);
+    });
+
+    it("没有上一轮页面时永远不算追问", () => {
+      assert.equal(isPureFollowUp("耗电多少", undefined), true);
+      assert.equal(isPureFollowUp("水泵有什么用", undefined), false);
+    });
   });
 });
 
@@ -478,5 +603,114 @@ describe("plugins/aiQueryCommands 回复渲染", () => {
       assert.ok(wrapped.endsWith("\n````"), wrapped);
       assert.ok(wrapped.includes("```js"));
     });
+  });
+});
+
+describe("plugins/aiQueryCommands 多人群聊隔离", () => {
+  const SESSION = { platform: "qq", channelId: "group1", userId: "user-b" } as any;
+  const ELECTROLYZER = {
+    question: "电解器是什么",
+    answer: "制氧建筑。",
+    page: "电解器",
+    at: Date.now(),
+  };
+
+  function createContextPlugin(options: {
+    own?: any[];
+    shared?: any[];
+  }) {
+    const plugin = Object.create(AiQueryCommands.prototype) as any;
+    plugin.config = { aiMemoryTurns: 2, aiMemoryTtl: 600, aiChannelMemory: true };
+    plugin.log = { info() {}, warn() {}, debug() {}, error() {} };
+    plugin.memory = new AiMemory(2, 600_000);
+    plugin.channelMemory = new AiMemory(1, 600_000);
+    plugin.ctx = { database: { get: async () => [] } };
+
+    if (options.own?.length) plugin.memory.add("qq:group1:user-b", options.own[0]);
+    if (options.shared?.length)
+      plugin.channelMemory.add("topic:qq:group1", options.shared[0]);
+    return plugin;
+  }
+
+  it("自带新实体时不取任何历史（B 问水泵，不受 A 的电解器影响）", async () => {
+    const plugin = createContextPlugin({ shared: [ELECTROLYZER] });
+    const context = await plugin.resolveContext(SESSION, "水泵有什么用");
+
+    assert.deepEqual(context.turns, []);
+    assert.equal(context.shared, false);
+  });
+
+  it("自己刚问过别的，换话题时也不回放自己的历史", async () => {
+    const plugin = createContextPlugin({ own: [ELECTROLYZER] });
+    const context = await plugin.resolveContext(SESSION, "水泵机制");
+
+    assert.deepEqual(context.turns, []);
+  });
+
+  it("纯追问才承接群话题，并标记 shared", async () => {
+    const plugin = createContextPlugin({ shared: [ELECTROLYZER] });
+    const context = await plugin.resolveContext(SESSION, "耗电多少");
+
+    assert.equal(context.turns.length, 1);
+    assert.equal(context.shared, true);
+    assert.equal(context.inheritedFrom, "电解器是什么");
+  });
+
+  it("点名了最近话题时也算追问（可用自己的历史）", async () => {
+    const plugin = createContextPlugin({ own: [ELECTROLYZER] });
+    const context = await plugin.resolveContext(SESSION, "电解器的材料呢");
+
+    assert.equal(context.turns.length, 1);
+    assert.equal(context.shared, false);
+  });
+
+  it("完全没有历史时返回空上下文", async () => {
+    const plugin = createContextPlugin({});
+    const context = await plugin.resolveContext(SESSION, "耗电多少");
+
+    assert.deepEqual(context.turns, []);
+  });
+
+  it("群话题只回放「问了什么」，不回放别人的答案", async () => {
+    const { plugin, completeCalls } = createPlugin({
+      decisions: [plan([toolCall("c1", "耗电多少")]), final("120 瓦。")],
+      pages: { 电解器: "电解器正文" },
+      pageList: ["电解器"],
+    });
+
+    await plugin.runAgent("耗电多少", [ELECTROLYZER], true);
+
+    const messages = completeCalls[0].messages;
+    assert.equal(
+      messages.some((m) => m.role === "assistant"),
+      false,
+      "别人的答案不该被回放",
+    );
+    const hint = messages.find(
+      (m) => m.role === "system" && String(m.content).includes("群内上一问"),
+    ) as { content: string } | undefined;
+    assert.ok(hint, "应带上群内上一问的提示");
+    assert.ok(hint!.content.includes("电解器是什么"));
+    assert.ok(!hint!.content.includes("制氧建筑"), "答案正文不能进提示");
+  });
+
+  it("自己的历史答案回放时会被压缩成摘要", async () => {
+    const { plugin, completeCalls } = createPlugin({
+      decisions: [plan([toolCall("c1", "电解器")]), final("120 瓦。")],
+      pages: { 电解器: "电解器正文" },
+      pageList: ["电解器"],
+    });
+
+    const longAnswer = "电解器".repeat(200);
+    await plugin.runAgent(
+      "那它耗电多少",
+      [{ question: "电解器是什么", answer: longAnswer, page: "电解器", at: 1 }],
+      false,
+    );
+
+    const assistant = completeCalls[0].messages.find((m) => m.role === "assistant") as {
+      content: string;
+    };
+    assert.ok(assistant.content.length <= 201, `实际 ${assistant.content.length} 字`);
   });
 });

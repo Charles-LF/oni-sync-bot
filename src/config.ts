@@ -1,18 +1,9 @@
 import { Schema } from "koishi";
 
 /**
- * 插件配置的**唯一声明处**。
- *
- * 约束：每个配置键只允许在这里出现一次。
- *
- * 早期实现让每个子插件各自声明一份 `Config`，再在 `index.ts` 里用
- * `Schema.intersect` 拼接。结果是同一个键被重复声明：
- * `domain` 3 次、`main_site` / `bwiki_site` / `logsUrl` 各 2 次、
- * 4 个账号字段各 2 次。`intersect` 合并重复键时后者覆盖前者，
- * 控制台里会出现同一字段多份且语义略有出入。
- *
- * 新增子插件时：**不要**新建重复字段，把需要的字段归到语义合适的分组里，
- * 子插件通过 `Pick` / `extends` 引用分组即可。
+ * 插件配置的唯一声明处：**每个键只允许出现一次**。
+ * 新增子插件时把字段归到语义相符的分组，再用 `Pick` / `extends` 引用，
+ * 不要重复声明（重复会在控制台出现多份同名字段）。
  */
 
 /** 短链域名与两个站点地址 */
@@ -136,21 +127,18 @@ export const AiConfig: Schema<AiConfig> = Schema.object({
     .default(600),
   aiChannelMemory: Schema.boolean()
     .description(
-      "允许群内承接话题：用户自己没提问记录时，用群里上一条问答的语境回答「那它…」这类追问",
+      "群内追问承接：问题没有主语（「耗电多少」）时才借用群内上一问的语境",
     )
     .default(true),
   aiCodeBlockMinChars: Schema.natural()
     .description(
-      "QQ 下回答超过这么多字时塞进代码块（折叠成可复制卡片，避免手机端刷屏）；0 表示始终不用代码块",
+      "QQ 下回答超过该字数塞进代码块（折叠可复制卡片，避免刷屏）；0 = 始终不用",
     )
     .default(180)
     .max(2000),
 });
 
-/**
- * 插件完整配置 = 各分组之并集。
- * 顺序即控制台中的展示顺序，也保持与重构前首次出现顺序一致。
- */
+/** 完整配置 = 各分组之并集，顺序即控制台展示顺序 */
 export interface Config
   extends AccountConfig,
     SiteConfig,

@@ -22,21 +22,61 @@ export type AiQueryConfig = AiConfig &
 /** 工具名：AI 通过它要求程序去 BWiki 取正文 */
 export const SEARCH_TOOL_NAME = "search_oni_bwiki";
 
-/** 单次问答最多真正执行几个检索（比较类问题通常 2 个，再多就是模型发散） */
+/** 单次问答最多执行的检索数（比较类问题 2 个足够） */
 const MAX_TOOL_CALLS = 2;
 
-/**
- * 本地拼音模糊匹配的最低分：6 分只代表「首字母包含」，
- * 一个乱码关键词也可能凑上，宁可交给 wiki 全文检索。
- */
+/** 拼音模糊匹配的最低分：6 分只是「首字母包含」，不可信 */
 const MIN_FUZZY_SCORE = 8;
 
-/** 关键词最多拆成几个候选（整句 + 片段），防止一次问答产生过多请求 */
+/** 候选词上限 / 全文检索上限 / 正文抓取上限：限制单次问答的请求数 */
 const MAX_TITLE_CANDIDATES = 3;
-/** 最多对几个候选发起 BWiki 全文检索（每次一条 list=search） */
 const MAX_TITLE_SEARCH = 2;
-/** 最多真正抓取几个候选页面（每次一条 action=parse） */
 const MAX_PAGE_FETCH = 4;
+
+/**
+ * 纯追问判定的词表（指代 + 疑问 + 属性）。
+ *
+ * 必须按长度降序匹配（「建筑材料」先于「材料」）；
+ * 不要放会切坏实体名的单字（干板墙 / 高压制氧 / 小行星 / 大嘴鱼）。
+ */
+const FOLLOW_UP_WORDS = [
+  // 指代
+  "这个", "那个", "这件", "那件", "这些", "那些", "这种", "那种", "这", "那", "该", "此",
+  "它", "他", "她",
+  // 疑问 / 语气 / 连接
+  "怎么样", "怎么办", "为什么", "是什么", "有什么", "能不能", "可不可以", "是不是", "有没有",
+  "哪个", "哪些", "干什么", "干嘛", "干哈", "干啥", "怎么用", "怎么", "怎样", "如何",
+  "什么", "多少", "多久", "几个", "几点", "能干", "能", "可以", "会", "要", "需要",
+  "吗", "呢", "吧", "啊", "呀", "的", "了", "和", "与", "跟",
+  "用", "用处", "用法", "用途", "作用", "效果", "详情", "介绍", "说明", "信息", "资料", "情况",
+  // 常见属性名（缺氧词条信息框里的字段）
+  "建筑材料", "材料", "耗电", "费电", "电力", "功耗", "用电", "功率",
+  "产热", "发热", "热量", "温度", "过热", "低温",
+  "建造", "科技", "类别", "类型", "尺寸", "大小", "装饰度", "装饰",
+  "血量", "耐久", "寿命", "效率", "速度", "产量", "消耗", "产出", "容量", "存储", "重量", "质量",
+  "机制", "技巧", "原理", "区别", "对比", "优缺点", "优点", "缺点", "好处", "坏处",
+  "值得", "合适", "推荐", "拿来", "用来",
+].sort((a, b) => b.length - a.length);
+
+/** 剔掉指代/疑问/属性词后剩下的实体部分：「耗电多少」→ ""，「水泵有什么用」→「水泵」 */
+export function residualSubject(keyword: string): string {
+  let rest = keyword ?? "";
+  for (const word of FOLLOW_UP_WORDS) {
+    if (rest.includes(word)) rest = rest.split(word).join("");
+  }
+  return rest.replace(/[\s\p{P}\p{S}]/gu, "");
+}
+
+/** 是否只能靠上一轮话题回答：点名了上一轮页面，或剔完不剩实体 */
+export function isPureFollowUp(
+  keyword: string,
+  previousPage?: string,
+): boolean {
+  const kw = (keyword ?? "").trim();
+  if (!kw) return true;
+  if (previousPage && kw.includes(previousPage)) return true;
+  return residualSubject(kw) === "";
+}
 
 /** 交给 DeepSeek 的工具声明 */
 const SEARCH_TOOL: ToolDefinition = {
@@ -69,24 +109,35 @@ interface AiSource {
 interface AgentAnswer {
   answer: string;
   sources: AiSource[];
-  /** 本轮实际查过的页面标题（写入记忆，供下一轮兜底） */
+  /** 本轮查过的页面（写入记忆，供下一轮兜底） */
   pages: string[];
+  /** 真正复用了上一轮页面时才有的标记，用于决定回复里是否标注「承接」 */
+  reusedPage?: string;
+}
+
+/** 一次 `searchPage` 的结果 */
+interface PageLookup {
+  title: string;
+  text: string;
+  /** 是否沿用上一轮页面（而非本轮新检索到的） */
+  reused?: boolean;
+}
+
+/** 这一问可用的历史上下文 */
+interface ResolvedContext {
+  turns: MemoryTurn[];
+  /** 群内上一问的原话（用于回复里标注来源） */
+  inheritedFrom?: string;
+  /** 历史来自群内别人的问答：只回放问题，不回放答案 */
+  shared: boolean;
 }
 
 /**
- * `.ai` 问答：DeepSeek Function Calling + mwn 实时抓取 BWiki 正文。
- *
- * 数据链路（Wikitext 源码永远不参与 AI）：
- * `用户问题` → DeepSeek 发起 `search_oni_bwiki(keyword)` → 本地 `wikipages` 拼音匹配出标题
- * → `wikiBot.fetchPagePlainText(title)`（mwn `action=parse` + cheerio 清洗）
- * → `role:'tool'` 回填正文 → DeepSeek 生成回答。
- *
- * 为什么单独做成子插件：`QueryCommands` 只依赖数据库、回复页面链接；
- * AI 问答额外依赖 http + wikiBot + 外部 API，单独成插件后任何一环没配好，
- * 都不会影响原有的 `x` 拼音查询。
+ * `.ai` 问答：模型发起 `search_oni_bwiki(keyword)` → 拼音匹配出标题 →
+ * `fetchPagePlainText` 取正文 → `role:'tool'` 回填 → 模型出终稿。
  */
 export class AiQueryCommands {
-  /** `wikiBot` / `http` 可选：缺任意一项时 `.ai` 仍应给出明确提示，而不是整组命令消失 */
+  /** wikiBot / http 可选：缺失时 `.ai` 给出提示，而不是整组命令消失 */
   public static readonly inject = {
     database: { required: true },
     wikiBot: { required: false },
@@ -98,11 +149,11 @@ export class AiQueryCommands {
   private readonly ai: AiService;
   private readonly log: Logger;
   private readonly pageUrlBase: string;
-  /** 用户 → 上次提问时间，用于冷却 */
+  /** 用户 → 上次提问时间（冷却） */
   private readonly lastAskedAt = new Map<string, number>();
-  /** 用户 → 最近几轮问答，用于追问 */
+  /** 用户 → 最近几轮问答 */
   private readonly memory: AiMemory;
-  /** 频道 → 最近一轮问答，用于「群里别人刚问过，我接着问」 */
+  /** 频道 → 最近一轮问答（供群内追问承接） */
   private readonly channelMemory: AiMemory;
 
   constructor(
@@ -117,7 +168,7 @@ export class AiQueryCommands {
     const bwiki = siteUrl(config.bwiki_site || "wiki.biligame.com/oni");
     this.pageUrlBase = `${bwiki}/`;
     this.memory = new AiMemory(config.aiMemoryTurns, config.aiMemoryTtl * 1000);
-    // 群内话题只承接「上一轮」，且与用户记忆同 TTL，避免不同人的话题互相串
+    // 群话题只保留 1 轮，TTL 与用户记忆一致
     this.channelMemory = new AiMemory(
       Math.min(1, Math.max(0, config.aiMemoryTurns)),
       config.aiMemoryTtl * 1000,
@@ -170,16 +221,22 @@ export class AiQueryCommands {
           );
         }
 
-        const context = await this.resolveContext(session);
+        const context = await this.resolveContext(session, keyword);
 
         try {
-          const result = await this.runAgent(keyword, context.turns);
+          const result = await this.runAgent(
+            keyword,
+            context.turns,
+            context.shared,
+          );
           this.remember(session, keyword, result.answer, result.pages);
+          // 只有真正沿用了上一轮的页面才标注「承接」，独立检索到新页面时不标注，
+          // 否则用户会以为这一问还在聊上一轮的对象。
           return this.renderAnswer(
             session,
             result.answer,
             result.sources,
-            context.inheritedFrom,
+            result.reusedPage ? context.inheritedFrom : undefined,
           );
         } catch (error) {
           this.log.error(`[ai] 「${keyword}」回答失败：${getErrorMessage(error)}`);
@@ -221,24 +278,34 @@ export class AiQueryCommands {
   // -------------------------------------------------------------- Agent 主流程
 
   /**
-   * 一次完整的 Agent 问答：正常情况两轮模型调用（模型不肯调工具时三轮）。
-   *
-   * 1. 第 1 轮带 `tools` 与 `tool_choice:'auto'`，让模型自己决定检索什么；
-   * 2. 模型没有发起调用时，用 `tool_choice:'required'` **强制**检索一次
-   *    （防止它凭记忆作答）；这一步失败也不影响出答案，会退回第 1 轮的内容；
-   * 3. 每个 `tool_call` 都必须回填一条 `role:'tool'`，否则下一次请求不合法；
-   * 4. 第 2 轮带 `tools` 但 `tool_choice:'none'`：既保证消息结构对各家兼容层都合法，
-   *    又明确禁止再次调工具，把回答收敛到一次检索内。
+   * 一次 Agent 问答：第 1 轮 `tool_choice:'auto'` 让模型决定检索什么；
+   * 没发起调用则用 `'required'` 逼它检索一次（失败则退回直接回答）；
+   * 第 2 轮带 `tools` + `'none'`，结构合法且禁止再调工具。
    */
   private async runAgent(
     question: string,
-    turns: MemoryTurn[],
+    turns: MemoryTurn[] = [],
+    shared = false,
   ): Promise<AgentAnswer> {
     const history: AgentMessage[] = [];
-    for (const turn of turns) {
-      if (!turn.question || !turn.answer) continue;
-      history.push({ role: "user", content: turn.question });
-      history.push({ role: "assistant", content: turn.answer });
+
+    if (shared) {
+      // 群内别人的问答只取问题，答案正文可能是另一套资料，回放会被当成当前事实
+      const last = [...turns].reverse().find((turn) => turn.question);
+      if (last) {
+        history.push({
+          role: "system",
+          content: `【群内上一问（只用于判断「它」「这个」指代谁，不是当前问题）】${last.question}`,
+        });
+      }
+    } else {
+      for (const turn of turns) {
+        if (!turn.question || !turn.answer) continue;
+        // 「未提及」的轮次没有信息，回放只会诱发继续答未提及
+        if (isNoAnswer(turn.answer)) continue;
+        history.push({ role: "user", content: turn.question });
+        history.push({ role: "assistant", content: clipAnswer(turn.answer) });
+      }
     }
 
     const messages: AgentMessage[] = [
@@ -261,7 +328,7 @@ export class AiQueryCommands {
           toolChoice: "required",
         });
       } catch (error) {
-        // 个别兼容层不支持 tool_choice='required'：不让它把整次问答拖垮
+        // 兼容层可能不支持 'required'，别让它拖垮整次问答
         this.log.warn(
           `[ai] 强制检索调用失败，回退为直接回答：${getErrorMessage(error)}`,
         );
@@ -279,6 +346,7 @@ export class AiQueryCommands {
     const toolMessages: AgentMessage[] = [];
     const sources: AiSource[] = [];
     const pages: string[] = [];
+    let reusedPage: string | undefined;
 
     for (let index = 0; index < decision.toolCalls.length; index++) {
       const call = decision.toolCalls[index];
@@ -315,6 +383,7 @@ export class AiQueryCommands {
         pages.push(page.title);
         sources.push({ title: page.title, url: this.pageUrl(page.title) });
       }
+      if (page.reused) reusedPage = page.title;
       toolMessages.push({
         role: "tool",
         tool_call_id: call.id,
@@ -330,29 +399,28 @@ export class AiQueryCommands {
       ...toolMessages,
     ];
 
-    // 带 tools + tool_choice:'none'：结构对所有兼容层都合法，同时禁止再调工具
+    // 带 tools + 'none'：结构合法且禁止再调工具
     const final = await this.ai.complete(finalMessages, {
       tools: [SEARCH_TOOL],
       toolChoice: "none",
     });
     const answer = final.content || NO_ANSWER_TEXT;
     this.log.info(
-      `[ai] 「${question}」→ 检索 ${pages.join("、") || "（无）"}，回答 ${answer.length} 字`,
+      `[ai] 「${question}」→ 检索 ${pages.join("、") || "（无）"}${reusedPage ? `（沿用上一轮 ${reusedPage}）` : ""}，回答 ${answer.length} 字`,
     );
-    return { answer, sources, pages };
+    return { answer, sources, pages, reusedPage };
   }
 
   /**
-   * 按关键词取页面正文。
+   * 按关键词取页面正文（候选逐个尝试，第一个抓到即为结果）。
    *
-   * 先解析出一串候选标题（本地拼音匹配 → wiki 全文检索 → 原样用关键词），
-   * 逐个尝试抓取，第一个拿到正文的即为结果。抓取次数有上限：
-   * 每个候选都是一次 `action=parse`，问一句打七八个请求会让群友等上好几秒。
+   * 兜底只在**纯追问**时启用：群里刚聊过氧石精炼炉，接着问「水泵有什么用」
+   * 若拿氧石精炼炉的正文作答就是答非所问，因此宁可回「未提及」。
    */
   private async searchPage(
     keyword: string,
     turns: MemoryTurn[],
-  ): Promise<{ title: string; text: string } | null> {
+  ): Promise<PageLookup | null> {
     const wikiBot = this.ctx.wikiBot;
     if (!wikiBot) {
       this.log.warn("[ai] 未启用 wikiBot 服务，无法获取 BWiki 正文");
@@ -368,31 +436,38 @@ export class AiQueryCommands {
       }
     }
 
-    // 追问兜底：关键词没解析出页面时，沿用上一轮查过的那一页
-    const previous = turns[turns.length - 1]?.page;
-    if (previous && !titles.includes(previous)) {
-      const text = await wikiBot.fetchPagePlainText(previous);
-      if (text) {
-        this.log.info(`[ai] 检索未命中，沿用上一轮页面: ${previous}`);
-        return { title: previous, text };
-      }
+    // 追问兜底：取最近一轮真正查到过页面的记录
+    const previous = [...turns].reverse().find((turn) => turn.page)?.page;
+    if (!previous) {
+      this.log.info(`[ai] 未找到「${keyword}」对应页面`);
+      return null;
     }
 
-    this.log.info(`[ai] Agent 决定检索: 未找到「${keyword}」对应页面`);
-    return null;
+    if (!isPureFollowUp(keyword, previous)) {
+      this.log.info(
+        `[ai] 关键词「${keyword}」自带新实体且无对应页面，不使用上一轮资料（${previous}）`,
+      );
+      return null;
+    }
+
+    if (titles.includes(previous)) {
+      this.log.info(`[ai] 未找到「${keyword}」对应页面`);
+      return null;
+    }
+
+    const text = await wikiBot.fetchPagePlainText(previous);
+    if (!text) {
+      this.log.info(`[ai] 未找到「${keyword}」对应页面`);
+      return null;
+    }
+
+    this.log.info(`[ai] 追问「${keyword}」未命中新页面，沿用上一轮: ${previous}`);
+    return { title: previous, text, reused: true };
   }
 
   /**
-   * 关键词 → 候选页面标题。
-   *
-   * 与 `x` 查询同源的三级解析：
-   * 1. `wikipages` 精确标题；
-   * 2. `wikipages` 拼音 / 首字母 / 前缀模糊匹配（分数门槛 8，纯首字母命中不可信）；
-   * 3. BWiki 全文检索（救「高压制氧」这类不是页面名的叫法）；
-   * 4. 最后把候选词原样当标题（`redirects:true` 能吃掉重定向）。
-   *
-   * 候选词 = 整个关键词 + 按空格/标点拆出的片段（模型常给「电解器 耗电」这种形式）。
-   * 全文检索只对前两个候选发起，避免一次问答打出好几条 `list=search`。
+   * 关键词 → 候选标题：精确标题 → 拼音模糊（门槛 8）→ wiki 全文检索 → 原样当标题。
+   * 候选 = 整句 + 按空格/标点拆出的片段；全文检索只对前 2 个候选发起。
    */
   private async resolveTitles(keyword: string): Promise<string[]> {
     const kw = keyword.trim();
@@ -445,33 +520,32 @@ export class AiQueryCommands {
         (await this.ctx.wikiBot?.searchPageTitles(candidate, 1)) ?? [];
       push(searched[0]);
     }
-    for (const candidate of candidates) push(candidate);
+
+    // 纯属性/指代词不可能是页面名，精确匹配早已覆盖，别再白抓一次 404
+    for (const candidate of candidates) {
+      if (residualSubject(candidate) === "") continue;
+      push(candidate);
+    }
     return titles;
   }
 
   // ------------------------------------------------------------ 回复与来源
 
-  /**
-   * 组装回复。
-   *
-   * QQ 的长回答会把手机屏幕顶满：官方 markdown 消息里的**代码块会折叠成一张可复制的卡片**，
-   * 因此当正文超过 `aiCodeBlockMinChars` 时整段塞进代码块，短回答仍走普通 markdown
-   * （代码块里 `•`、`**加粗**` 都不会被渲染，所以进块前会先去掉这些标记）。
-   */
+  /** 组装回复：QQ 长回答塞进代码块（折叠成可复制卡片），短回答走普通 markdown */
   private async renderAnswer(
     session: Session | undefined,
     answer: string,
     sources: AiSource[],
     inheritedFrom?: string,
   ): Promise<string | undefined> {
-    // 「资料未提及」时列出检索片段会误导用户以为这些就是答案依据
+    // 「未提及」时列来源会误导用户以为那就是依据
     const visible = isNoAnswer(answer) ? [] : sources.slice(0, 3);
     const inherited = inheritedFrom
       ? `💭 承接群内上一问：${inheritedFrom}`
       : undefined;
 
     if (this.renderer.isQQ(session)) {
-      // QQ markdown 消息有长度上限，先截断正文再拼来源
+      // QQ markdown 有长度上限，先截断正文
       const body = truncateForQQ(answer);
       const threshold = this.config.aiCodeBlockMinChars;
       const asBlock = threshold > 0 && body.length >= threshold;
@@ -532,10 +606,8 @@ export class AiQueryCommands {
   // ------------------------------------------------------------ 短期记忆
 
   /**
-   * 记忆键：平台 + 频道 + 用户。
-   *
-   * 按用户隔离而不是按频道，避免群里 A 的追问被 B 的问题串了话题；
-   * 控制台/无会话调用时返回空串，此时不记也不读。
+   * 记忆键 = 平台 + 频道 + 用户（按用户隔离，避免群里互相串话题）。
+   * 无会话时返回空串，此时不记也不读。
    */
   private sessionKey(session: Session | undefined): string {
     if (!session) return "";
@@ -571,26 +643,40 @@ export class AiQueryCommands {
   }
 
   /**
-   * 决定这一问用哪段上下文。
-   *
-   * - 自己刚问过 → 用**自己的**历史（优先，避免被别人的话题带偏）；
-   * - 自己没记录、且开启了 `aiChannelMemory` → 承接**群里上一轮**，
-   *   这样 alice 问「氧石精炼炉是什么」，bob 接着问「那它耗电多少」也能答；
-   * - 都没有 → 单轮问答。
+   * 只在**纯追问**时加载历史，这是多人聊天不串台的关键：
+   * 自带实体的问题（「水泵有什么用」）零历史、独立检索；
+   * 自己的历史同样处理，换话题时不回放自己的上一问。
    */
-  private async resolveContext(session: Session | undefined): Promise<{
-    turns: MemoryTurn[];
-    inheritedFrom?: string;
-  }> {
+  private async resolveContext(
+    session: Session | undefined,
+    question: string,
+  ): Promise<ResolvedContext> {
     const own = await this.history(session);
-    if (own.length > 0)
-      return pickContext(own, [], this.config.aiChannelMemory);
-
     const shared = await this.channelHistory(session);
-    return pickContext([], shared, this.config.aiChannelMemory);
+
+    // 最近一个查到过页面的轮次，用于判断这一问是不是在指它
+    const recentPage = [...own, ...shared]
+      .reverse()
+      .find((turn) => turn.page)?.page;
+
+    if (!isPureFollowUp(question, recentPage)) {
+      return { turns: [], shared: false };
+    }
+
+    if (own.length > 0) return { turns: own, shared: false };
+
+    const picked = pickContext([], shared, this.config.aiChannelMemory);
+    return {
+      turns: picked.turns,
+      inheritedFrom: picked.inheritedFrom,
+      shared: true,
+    };
   }
 
-  /** 记录一轮问答：同时写用户记忆与群话题（后者供其他人追问），并落库 */
+  /**
+   * 记录一轮问答（同时落库）。
+   * 群话题只在真的查到页面时才更新，否则没命中的追问会把有效话题冲掉。
+   */
   private remember(
     session: Session | undefined,
     question: string,
@@ -600,8 +686,8 @@ export class AiQueryCommands {
     const turn = { question, answer, page: pages[0] };
     this.memory.add(this.sessionKey(session), turn);
 
-    // 「未提及」的回答不构成新话题，否则群里接着问会挂到一句废话上
-    if (!isNoAnswer(answer)) {
+    // 「未提及」或没查到页面的回答不构成新话题，否则群里接着问会挂到一句废话上
+    if (!isNoAnswer(answer) && pages.length > 0) {
       this.channelMemory.add(this.channelKey(session), turn);
     }
 
@@ -658,7 +744,7 @@ export class AiQueryCommands {
   }
 }
 
-/** 从 tool_call 里读关键词：模型偶尔会用 `query` / `title` 之类的别名 */
+/** 从 tool_call 里读关键词（兼容 query / title 这类别名） */
 function readKeyword(call: ParsedToolCall): string {
   for (const field of ["keyword", "query", "title", "name"]) {
     const value = call.args[field];
@@ -667,38 +753,38 @@ function readKeyword(call: ParsedToolCall): string {
   return "";
 }
 
-/** QQ markdown 有长度上限：超出时截断正文，避免整条消息发不出去 */
+/** QQ markdown 有长度上限，超出先截断 */
 function truncateForQQ(text: string, max = 2000): string {
   return text.length <= max ? text : `${text.slice(0, max)}…`;
 }
 
-/**
- * 把回答整理成「代码块里也好看」的纯文本。
- *
- * 代码块不渲染 markdown，`**加粗**`、`### 标题`、`- 列表` 会原样显示成符号，
- * 因此进块前统一去掉强调标记、把列表符号换成 `•`（手机上与项目符号同形）。
- */
+/** 回放历史时旧答案保留的字数 */
+const HISTORY_ANSWER_CHARS = 200;
+
+function clipAnswer(answer: string): string {
+  const text = answer.trim();
+  return text.length <= HISTORY_ANSWER_CHARS
+    ? text
+    : `${text.slice(0, HISTORY_ANSWER_CHARS)}…`;
+}
+
+/** 去掉 markdown 标记，让正文在代码块里也是干净文本 */
 export function toBlockText(text: string): string {
   return text
-    // 只把「### 标题」这种带空格的当标题，避免误伤「#1 号管道」
+    // 只把「### 标题」当标题，避免误伤「#1 号管道」
     .replace(/^[ \t]*#{1,6}[ \t]+/gm, "")
     .replace(/\*\*(.+?)\*\*/g, "$1")
     .replace(/__(.+?)__/g, "$1")
     .replace(/`([^`\n]+)`/g, "$1")
-    // 收尾：把落单的 ** 也去掉，否则卡片里会露出星号
+    // 落单的 ** 也去掉，否则卡片里会露星号
     .replace(/\*\*/g, "")
-    // 只把「- 」「* 」这种带空格的当列表，避免误伤「-10（范围 2 格）」这类数值
+    // 只把「- 」这种带空格的当列表，避免误伤「-10（范围 2 格）」
     .replace(/^[ \t]*[-*+][ \t]+/gm, "• ")
     .replace(/\[([^\]\n]+)\]\([^)\s]*\)/g, "$1")
     .trim();
 }
 
-/**
- * 用代码块包裹正文。
- *
- * 围栏长度按正文里最长的连续反引号决定（至少 3 个）：
- * 模型偶尔会在回答里带 ```，固定用 3 个反引号会把围栏提前闭合、后半段漏出代码块。
- */
+/** 用代码块包裹正文；围栏比正文里最长的连续反引号多一个，避免提前闭合 */
 export function wrapCodeBlock(text: string): string {
   const runs: string[] = text.match(/`+/g) ?? [];
   const longest = runs.reduce((max, run) => Math.max(max, run.length), 0);

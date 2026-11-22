@@ -26,18 +26,10 @@ function memberOf(bot: Mwn, prop: string | symbol): unknown {
 }
 
 /**
- * 生成一个「登录态永远有效」的客户端代理。
+ * 生成「登录态永远有效」的 mwn 代理：assert=user 失败时自动重登并重放。
  *
- * 为什么必须是代理而不是普通对象：Mwn 的方法很多，调用方还需要
- * `continuedQueryGen` 这类**异步生成器**以及 `options` 这类**非函数属性**。
- * 代理可以完整转发任意成员，同时把「assert=user 失败 → 重新登录 → 重放调用」
- * 这件事对调用方完全隐藏。
- *
- * ⚠️ 转发时**必须保留 `this` 绑定**：一律用 `fn.apply(bot, args)`，
- * 不能把方法先取出来再裸调（`const f = bot.f; f(...)`）。
- * Mwn 的方法内部会访问 `this.request` 等成员，丢失 `this` 会直接抛
- * `Cannot read properties of undefined (reading 'request')`。
- * 该约束由 tests/reloginAwareProxy.spec.ts 覆盖。
+ * 用 Proxy 是因为要完整转发任意成员（含 `continuedQueryGen` 生成器与 `options`）。
+ * ⚠️ 转发必须保留 `this`（一律 `fn.apply(bot, args)`），裸调会崩在 `this.request`。
  */
 export function createReloginAwareProxy(
   options: ReloginAwareProxyOptions,
