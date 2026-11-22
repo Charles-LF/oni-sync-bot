@@ -4,6 +4,7 @@ declare module "koishi" {
   interface Tables {
     wikipages: WikiPages;
     oniaimemory: OniAiMemory;
+    onilogs: OniLogRow;
   }
 }
 
@@ -31,6 +32,20 @@ export interface OniAiMemory {
   updated_at: number;
 }
 
+/** 本插件日志（最多保留 3000 条，供控制台页面查看历史） */
+export interface OniLogRow {
+  id: number;
+  /** 毫秒时间戳 */
+  time: number;
+  /** info / warn / error */
+  level: string;
+  /** 产生日志的 logger 名 */
+  name: string;
+  /** 归类的业务模块（页面同步 / 增量更新 / 登录 …） */
+  scope: string;
+  message: string;
+}
+
 export class DatabaseExtension {
   public static readonly inject = ["database"];
 
@@ -52,6 +67,19 @@ export class DatabaseExtension {
         updated_at: "integer",
       },
       { primary: "id" },
+    );
+
+    ctx.model.extend(
+      "onilogs",
+      {
+        id: "unsigned",
+        time: "integer",
+        level: "string",
+        name: "string",
+        scope: "string",
+        message: "text",
+      },
+      { primary: "id", autoInc: true },
     );
   }
 }

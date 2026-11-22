@@ -19,6 +19,46 @@
 
 ---
 
+## [0.13.0] — 2026-11-22
+
+> 控制台新增「日志中心」：本插件产生的日志会存进数据库，重启不丢，可在页面上按模块、级别、
+> 时间筛选与检索。同时修掉了 `ctx.oniCron` 未声明注入造成的启动告警。
+
+### Added
+
+- **日志落库**（`onilogs` 表，最多 3000 条）：
+  - `src/services/logStore.ts`：内存环形缓冲 + 节流批量落库 + 超限裁剪；启动时从库里恢复历史，
+    恢复期间新产生的日志重新编号后合并，前端 key 不会重复
+  - 只收录 `oni-sync` / `oni-*` 前缀的 logger，其它插件（含 Koishi 自身）的日志不进库
+  - `resolveScope()` 把日志自动归类为 **增量更新 / 全量页面同步 / 模块同步 / 图片同步 /
+    贡献者同步 / 页面同步 / 页面缓存更新 / 登录 / AI 问答 / Wiki 客户端 / TodoList /
+    定时任务 / 日志系统**，归类失败才落到「其他」
+- **控制台日志页**（`client/onilogs/logs.vue` 重写）：
+  - 级别 tab（全部 / 正常 / 警告 / 错误）、模块下拉、关键词、时间快捷范围（1 小时 / 24 小时 / 7 天）
+  - 分面统计：选中模块后，级别 tab 的数字只统计该模块；选中级别后，模块下拉的计数只统计该级别
+  - 点击任意一行展开详情（完整时间、级别、模块、来源 logger、序号、可换行的原文）
+  - 分页加载（每页 200 条），滚到顶部自动取更早的日志；新日志到达时「摘要 version」变化触发刷新
+  - 一键清空（需要控制台权限 1）
+- `onilogs/query`、`onilogs/clear` 两个控制台事件；`store.onilogs` 只推送
+  `{ totalAll, lastId, version }` 这几十字节的摘要，避免高频刷屏式全量同步
+
+### Changed
+
+- 控制台页面配色全部改用 Element Plus 变量（`--el-bg-color` / `--el-text-color-*` /
+  `--el-border-color*` / `--el-color-primary` 等），自动跟随 Koishi 明暗主题，不再写死深蓝渐变
+- 移动端适配：窄屏下筛选栏换行、消息换到第二行显示、按钮只留图标
+- `SUB_PLUGINS` 顺序调整：`DatabaseExtension` 提前到 `WikiBotService` 之前，数据表先声明再被使用
+
+### Fixed
+
+- `syncCommands` / `updateCommands` / `todoList` 补上 `oniCron` 的 `inject` 声明，
+  启动时不再刷 `property oniCron is not registered` 警告
+- 首次启动时数据表尚未创建导致的 `日志读取失败：cannot resolve table "onilogs"`
+  改为延迟重试一次；确实读不出来时降级为 debug 日志，不再污染日志列表
+- 日志系统自身的问题（读取 / 写入 / 清空失败）单独归入「日志系统」模块，不再混进业务日志
+
+---
+
 ## [0.12.7] — 2026-11-22
 
 ### Added

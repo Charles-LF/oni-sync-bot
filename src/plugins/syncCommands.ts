@@ -19,6 +19,7 @@ export class SyncCommands {
   public static readonly inject = {
     wikiBot: { required: true },
     database: { required: true },
+    oniCron: { required: true },
     http: { required: false },
   };
   public config: SyncCommandsConfig;

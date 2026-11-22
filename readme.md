@@ -82,7 +82,7 @@ npm uninstall vectra @huggingface/transformers   # 0.12.0 起不再需要
 
 插件需要以下 Koishi 插件（通常已随 Koishi 提供）：
 
-- `@koishijs/plugin-database`（`wikipages` / `onitodos` / `oniaimemory` 持久化）
+- `@koishijs/plugin-database`（`wikipages` / `onitodos` / `oniaimemory` / `onilogs` 持久化）
 - `@koishijs/plugin-server`（短链路由）
 - `@koishijs/plugin-console`（控制台页面与日志查看）
 - `@koishijs/plugin-http`（调用 DeepSeek 接口）
@@ -298,8 +298,9 @@ npm uninstall vectra @huggingface/transformers   # 0.12.0 起不再需要
 | `wikipages` | `id`、`title`、`pinyin_full`、`pinyin_first`、`contributor`、`change_time`                                       |
 | `oniaimemory` | `id`（主键=记忆键）、`payload`（JSON）、`updated_at`（毫秒时间戳）                                       |
 | `onitodos`  | `id`、`title`、`content`、`completed`、`createdBy`、`createdAt`、`updatedAt`                                     |
+| `onilogs`   | `id`（自增）、`time`、`level`、`name`、`scope`、`message`（最多保留 3000 条）                                     |
 
-`wikipages` / `oniaimemory` 通过 `Tables` 接口增强声明（见 `databaseExtension.ts`）；`onitodos` 目前**没有**做接口增强。
+`wikipages` / `oniaimemory` / `onilogs` 通过 `Tables` 接口增强声明（见 `databaseExtension.ts`）；`onitodos` 目前**没有**做接口增强。
 
 > 0.12.0 起不再维护 `wikitexts` 表（渲染文本改为按需抓取），0.12.5 起连表声明也移除了。
 > 旧库里的这张表不会被自动删除，但插件**不会再读写它**，可以自行 `DROP TABLE wikitexts` 回收空间。
@@ -310,9 +311,19 @@ npm uninstall vectra @huggingface/transformers   # 0.12.0 起不再需要
 
 | 页面           | 源码位置                  | 功能                                        |
 | -------------- | ------------------------- | ------------------------------------------- |
-| 同步机器人首页 | `client/onilogs/`         | 查看 `oni-sync` 命名空间日志（最多保留 1000 条） |
+| 同步机器人首页 | `client/onilogs/`         | 日志中心：按模块 / 级别 / 时间筛选与检索（最多保留 3000 条） |
 | 缺氧 TodoList  | `client/onitodolist/`     | 待办的可视化增删改查                        |
 | 火箭计算器     | `client/Rocketcalculator/`| ONI 火箭设计计算器                          |
+
+### 日志中心
+
+- 只收录本插件（`oni-sync` / `oni-*`）的日志，其它插件的日志不会进库
+- 自动归类成「增量更新 / 全量页面同步 / 模块同步 / 图片同步 / 贡献者同步 / 登录 / AI 问答 /
+  Wiki 客户端 / TodoList / 定时任务 / 日志系统」等模块，登录、定时任务、增量更新互不干扰
+- 级别 tab 与模块下拉的数字是**联动**的：选中模块后，tab 上的数字只统计该模块
+- 点击任意一行展开详情（完整时间、来源 logger、序号、可换行原文）；滚到顶部自动加载更早的日志
+- 清空按钮需要控制台权限 1；历史日志最多保留 3000 条，超出的旧日志会自动删除
+
 
 ## 📦 项目结构
 
@@ -326,10 +337,11 @@ src/
 │   ├── aiService.ts          # DeepSeek 客户端（Function Calling）+ 两套提示词
 │   ├── aiMemory.ts           # 追问记忆（用户 / 群话题）与上下文选择
 │   ├── messageRenderer.ts    # QQ markdown+按钮 / 纯文本 的渲染
+│   ├── logStore.ts           # 日志仓库：内存 3000 条 + 节流落库 + 模块归类
 │   └── consoleLogProvider.ts # 控制台日志服务（onilogs）
 ├── plugins/
 │   ├── cronService.ts        # 挂载 ctx.oniCron
-│   ├── databaseExtension.ts  # wikipages / oniaimemory 表定义
+│   ├── databaseExtension.ts  # wikipages / oniaimemory / onilogs 表定义
 │   ├── queryCommands.ts      # x / 查wiki
 │   ├── aiQueryCommands.ts    # ai / ai.status（Agent 调度）
 │   ├── syncCommands.ts       # sync.* 命令 + 同步相关定时任务

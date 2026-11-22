@@ -60,6 +60,7 @@ export class TodoList {
     database: { required: true },
     console: { required: true },
     wikiBot: { required: true },
+    oniCron: { required: true },
   };
   public log: Logger;
 

@@ -1,14 +1,22 @@
 <template>
-    <k-layout>
-        <el-scrollbar class="scrollbar">
-            <k-slot name="onilogs" />
-        </el-scrollbar>
-    </k-layout>
+  <k-layout>
+    <el-scrollbar class="oni-logs-page">
+      <k-slot name="onilogs" />
+    </el-scrollbar>
+  </k-layout>
 </template>
 
-<style lang="css" scoped>
-.scrollbar {
-    background: linear-gradient(135deg, #0a0e27 0%, #1a1f3a 50%, #0f172a 100%);
-    color: #e0e7ff;
+<style lang="scss" scoped>
+/* 背景与文字色跟随控制台主题（--el-* 由 Element Plus / Koishi 主题注入） */
+.oni-logs-page {
+  padding: 16px;
+  color: var(--el-text-color-primary);
+  background: var(--el-bg-color-page);
+}
+
+@media (max-width: 768px) {
+  .oni-logs-page {
+    padding: 10px;
+  }
 }
 </style>

@@ -10,6 +10,7 @@ export class UpdateCommands {
   public static readonly inject = {
     database: { required: true },
     wikiBot: { required: true },
+    oniCron: { required: true },
   };
   public config: UpdateCommandsConfig;
   public log: Logger;

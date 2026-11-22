@@ -16,12 +16,12 @@ export { Config };
 
 export const name = "oni-sync-bot";
 
-/** 子插件注册表：**顺序即依赖顺序**（CronService 提供 oniCron，WikiBotService 提供 wikiBot） */
+/** 子插件注册表：**顺序即依赖顺序**（CronService 提供 oniCron，DatabaseExtension 先声明数据表） */
 const SUB_PLUGINS = [
   CronService,
+  DatabaseExtension,
   WikiBotService,
   ConsoleLogProvider,
-  DatabaseExtension,
   RouteRedirect,
   SyncCommands,
   QueryCommands,
