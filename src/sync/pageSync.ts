@@ -12,9 +12,9 @@ import { ImageSyncer } from "./imgSync";
 /**
  * pageSync 需要的数据库能力（结构化的最小接口）。
  *
- * 说明：`wikipages` 已经通过 `src/plugins/databaseExtension.ts` 里的 `Tables`
- * 接口增强声明过，但 `onitodos` 没有。这里刻意保留最小接口，避免与 Koishi
- * 的表类型强耦合。`get<T = unknown>` 是唯一保留的宽松点。
+ * 说明：`wikipages` 虽然已经通过 `src/plugins/databaseExtension.ts` 里的 `Tables`
+ * 接口增强声明过，这里仍刻意保留最小接口，避免与 Koishi 的表类型强耦合。
+ * `get<T = unknown>` 是唯一保留的宽松点。
  */
 export interface Database {
   set(table: string, query: object, data: object): Promise<unknown>;

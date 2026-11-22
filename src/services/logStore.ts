@@ -72,7 +72,6 @@ const SCOPE_RULES: Array<{ test: RegExp; scope: string }> = [
   { test: /\[syncSinglePage\]|\[数据库初始化\]/, scope: "页面同步" },
   { test: /\[ai\]|Agent 决定检索|DeepSeek|资料中未提及/, scope: "AI 问答" },
   { test: /\[wikiBot\]|正文缓存/, scope: "Wiki 客户端" },
-  { test: /\[todolist\]|TodoList|待办/, scope: "TodoList" },
   { test: /定时任务|定时同步|\[cron\]/, scope: "定时任务" },
   { test: /登录|relogin|assertuserfailed|Cookie/i, scope: "登录" },
 ];
@@ -84,7 +83,6 @@ export function resolveScope(name: string, message: string): string {
     if (rule.test.test(text)) return rule.scope;
   }
   if (name === "oni-ai") return "AI 问答";
-  if (name === "oni-todolist") return "TodoList";
   return "其他";
 }
 

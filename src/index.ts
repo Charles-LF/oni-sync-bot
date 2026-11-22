@@ -9,7 +9,6 @@ import { RouteRedirect } from "./plugins/routeRedirect";
 import { SyncCommands } from "./plugins/syncCommands";
 import { QueryCommands } from "./plugins/queryCommands";
 import { UpdateCommands } from "./plugins/updateCommands";
-import { TodoList } from "./plugins/todoList";
 import { AiQueryCommands } from "./plugins/aiQueryCommands";
 
 export { Config };
@@ -26,7 +25,6 @@ const SUB_PLUGINS = [
   SyncCommands,
   QueryCommands,
   UpdateCommands,
-  TodoList,
   AiQueryCommands,
 ] as const;
 

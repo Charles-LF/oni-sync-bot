@@ -19,6 +19,29 @@
 
 ---
 
+## [0.14.0] — 2026-11-23
+
+> **破坏性变更**：TodoList（待办）功能整体移除，前后端与相关命令、定时任务、数据表定义全部删除。
+
+### Removed
+
+- 移除后端 `src/plugins/todoList.ts`：`todolist.*` / `todo.*` 全部命令、`onitodos/*` 控制台事件、
+  「每周一收集模块待办」「每周二检查同步状态」两个定时任务，以及 `onitodos` 表定义
+- 移除前端 `client/onitodolist/`（`/onitodos` 页面与 `onitodos` slot）
+- 日志归类规则去掉 `TodoList`（`[todolist]` / `待办` / `oni-todolist` 兜底）
+
+### Changed
+
+- `SUB_PLUGINS` 不再包含 `TodoList`；控制台只剩「同步机器人首页（日志中心）」与「火箭计算器」两个页面
+- README 去掉 TodoList 章节、命令表、权限说明与定时任务表对应行，核心功能改为「日志中心」
+
+### Notes
+
+- 旧库里的 `onitodos` 表不会被自动删除，但插件**不再读写它**，可自行 `DROP TABLE onitodos` 回收空间
+- 若群里有人用 `todo` / `x todo` 之类的旧命令，现在会提示「指令未找到」，属预期行为
+
+---
+
 ## [0.13.0] — 2026-11-22
 
 > 控制台新增「日志中心」：本插件产生的日志会存进数据库，重启不丢，可在页面上按模块、级别、

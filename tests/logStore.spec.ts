@@ -55,7 +55,6 @@ describe("services/logStore 日志归类", () => {
 
   it("前缀判断不出来的按 logger 名兜底", () => {
     assert.equal(resolveScope("oni-ai", "无前缀的日志"), "AI 问答");
-    assert.equal(resolveScope("oni-todolist", "无前缀的日志"), "TodoList");
     assert.equal(resolveScope("oni-sync", "无前缀的日志"), "其他");
   });
 });

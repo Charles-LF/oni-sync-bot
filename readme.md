@@ -4,7 +4,7 @@
 [![Koishi](https://img.shields.io/badge/koishi-plugin-42b983?style=flat-square)](https://koishi.chat)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-**缺氧 Wiki 镜像站同步机器人插件** — 把 [oxygennotincluded.wiki.gg](https://oxygennotincluded.wiki.gg)（下称 **GG 原站**）的内容**单向镜像**到 B站 Wiki（下称 **bwiki**），并提供拼音页面查询、模块同步待办管理、短链接跳转与通配转发。
+**缺氧 Wiki 镜像站同步机器人插件** — 把 [oxygennotincluded.wiki.gg](https://oxygennotincluded.wiki.gg)（下称 **GG 原站**）的内容**单向镜像**到 B站 Wiki（下称 **bwiki**），并提供拼音页面查询、AI 问答、短链接跳转与通配转发。
 
 > 同步方向是 **GG 原站 → bwiki 单向**，不会把 bwiki 的改动回写原站。
 
@@ -47,12 +47,12 @@
 > Wikitext 源码**只**用于同步，永远不会进入 AI 链路。AI 只看到渲染后的纯文本。
 > 正文按页缓存 10 分钟（最多 50 页），群里反复问同一页不会重复请求 bwiki。
 
-### 📋 模块同步 TodoList
+### 🗂️ 日志中心
 
-- **自动纳管** — 每周一 00:00 拉取原站全部 Module 写入待办
-- **状态检查** — 每周二 00:00 对比两侧修订时间，自动标记完成 / 未完成
-- **控制台界面** — 搜索、筛选、分页、增删改查
-- **权限** — 删除 / 清空需权限 2，清空页面缓存需权限 4
+- **落库保留** — 本插件日志自动写入 `onilogs` 表，最多保留 3000 条，重启后仍能查看历史
+- **分模块呈现** — 增量更新 / 全量同步 / 登录 / AI 问答 / 定时任务等自动归类，互不混淆
+- **筛选检索** — 按级别、模块、时间范围筛选，支持关键词搜索与详情展开
+- **控制台界面** — 跟随 Koishi 明暗主题，移动端自适应
 
 ### 🔌 路由
 
@@ -82,7 +82,7 @@ npm uninstall vectra @huggingface/transformers   # 0.12.0 起不再需要
 
 插件需要以下 Koishi 插件（通常已随 Koishi 提供）：
 
-- `@koishijs/plugin-database`（`wikipages` / `onitodos` / `oniaimemory` / `onilogs` 持久化）
+- `@koishijs/plugin-database`（`wikipages` / `oniaimemory` / `onilogs` 持久化）
 - `@koishijs/plugin-server`（短链路由）
 - `@koishijs/plugin-console`（控制台页面与日志查看）
 - `@koishijs/plugin-http`（调用 DeepSeek 接口）
@@ -243,24 +243,7 @@ npm uninstall vectra @huggingface/transformers   # 0.12.0 起不再需要
 | `redirect <pageName> <targetPageName>`   | `重定向`   | 在原站创建 `#REDIRECT` 页面     | 2    |
 | `relogin`                                | `重新登录` | 手动重新登录两个站点            | 2    |
 
-### ✅ TodoList
-
-| 命令                     | 别名     | 说明                                     | 权限 |
-| ------------------------ | -------- | ---------------------------------------- | ---- |
-| `todolist`               | `todo`   | 跳转 TodoList 网页                       | -    |
-| `todolist.list`          | `todo.l` | 同上                                     | -    |
-| `todolist.add <title>`   | `todo.a` | 新增待办（`-c` 内容 / `-u` 创建人）      | -    |
-| `todolist.edit <id>`     | `todo.e` | 编辑待办（`-t` 标题 / `-c` 内容 / `-u`） | -    |
-| `todolist.complete <id>` | `todo.c` | 标记完成                                 | -    |
-| `todolist.uncomplete <id>`| `todo.u`| 标记未完成                               | -    |
-| `todolist.delete <id>`   | `todo.d` | 删除待办                                 | 2    |
-| `todolist.clear`         | -        | 清空 TodoList                            | 2    |
-| `todolist.syncmodules`   | -        | 手动把原站模块写入 TodoList              | -    |
-| `todolist.checksync`     | -        | 手动检查模块同步状态                     | -    |
-
-> 因为 `todolist` 的别名是 `todo`，Koishi 会把 `todo.list` 这类写法解析到 `todolist.list`，两种写法都能用。
->
-> 另有 4 个命令来自 Koishi 核心插件而非本插件：`help`、`status`、`clear`、`command`。
+> 以上之外还有 4 个命令来自 Koishi 核心插件而非本插件：`help`、`status`、`clear`、`command`。
 
 ## ⏰ 定时任务
 
@@ -275,8 +258,6 @@ npm uninstall vectra @huggingface/transformers   # 0.12.0 起不再需要
 | `30 8 * * 3`   | 每周三 08:30    | 同步所有图片            | —                                      |
 | `30 8 * * 4`   | 每周四 08:30    | 同步所有页面            | —                                      |
 | `0 0 2 * * 0`  | 每周日 02:00    | 同步所有贡献者          | —                                      |
-| `0 0 * * 1`    | 每周一 00:00    | 同步模块到 TodoList     | 拉取 `Module:` 命名空间页面写入待办     |
-| `0 0 * * 2`    | 每周二 00:00    | 检查模块同步状态        | 对比两侧修订时间，自动标记完成 / 未完成 |
 
 > 表达式写错时只记一条错误日志并跳过该任务，不会影响插件启动。
 > 需要查看已注册的任务与下次触发时间，可在控制台调试里执行 `ctx.oniCron.list()`。
@@ -297,29 +278,28 @@ npm uninstall vectra @huggingface/transformers   # 0.12.0 起不再需要
 | ----------- | --------------------------------------------------------------------------------------------------------------- |
 | `wikipages` | `id`、`title`、`pinyin_full`、`pinyin_first`、`contributor`、`change_time`                                       |
 | `oniaimemory` | `id`（主键=记忆键）、`payload`（JSON）、`updated_at`（毫秒时间戳）                                       |
-| `onitodos`  | `id`、`title`、`content`、`completed`、`createdBy`、`createdAt`、`updatedAt`                                     |
 | `onilogs`   | `id`（自增）、`time`、`level`、`name`、`scope`、`message`（最多保留 3000 条）                                     |
 
-`wikipages` / `oniaimemory` / `onilogs` 通过 `Tables` 接口增强声明（见 `databaseExtension.ts`）；`onitodos` 目前**没有**做接口增强。
+`wikipages` / `oniaimemory` / `onilogs` 通过 `Tables` 接口增强声明（见 `databaseExtension.ts`）。
 
 > 0.12.0 起不再维护 `wikitexts` 表（渲染文本改为按需抓取），0.12.5 起连表声明也移除了。
-> 旧库里的这张表不会被自动删除，但插件**不会再读写它**，可以自行 `DROP TABLE wikitexts` 回收空间。
+> 0.14.0 起不再有 `onitodos` 表（TodoList 功能已移除）。
+> 旧库里的这两张表不会被自动删除，但插件**不会再读写它们**，可以自行 `DROP TABLE wikitexts` / `DROP TABLE onitodos` 回收空间。
 
 ## 🎨 控制台界面
 
-插件在 Koishi 控制台注册一个入口页与两个子页面（见 [`client/index.ts`](client/index.ts)）：
+插件在 Koishi 控制台注册两个页面（见 [`client/index.ts`](client/index.ts)）：
 
 | 页面           | 源码位置                  | 功能                                        |
 | -------------- | ------------------------- | ------------------------------------------- |
 | 同步机器人首页 | `client/onilogs/`         | 日志中心：按模块 / 级别 / 时间筛选与检索（最多保留 3000 条） |
-| 缺氧 TodoList  | `client/onitodolist/`     | 待办的可视化增删改查                        |
 | 火箭计算器     | `client/Rocketcalculator/`| ONI 火箭设计计算器                          |
 
 ### 日志中心
 
 - 只收录本插件（`oni-sync` / `oni-*`）的日志，其它插件的日志不会进库
 - 自动归类成「增量更新 / 全量页面同步 / 模块同步 / 图片同步 / 贡献者同步 / 登录 / AI 问答 /
-  Wiki 客户端 / TodoList / 定时任务 / 日志系统」等模块，登录、定时任务、增量更新互不干扰
+  Wiki 客户端 / 定时任务 / 日志系统」等模块，登录、定时任务、增量更新互不干扰
 - 级别 tab 与模块下拉的数字是**联动**的：选中模块后，tab 上的数字只统计该模块
 - 点击任意一行展开详情（完整时间、来源 logger、序号、可换行原文）；滚到顶部自动加载更早的日志
 - 清空按钮需要控制台权限 1；历史日志最多保留 3000 条，超出的旧日志会自动删除
@@ -346,8 +326,7 @@ src/
 │   ├── aiQueryCommands.ts    # ai / ai.status（Agent 调度）
 │   ├── syncCommands.ts       # sync.* 命令 + 同步相关定时任务
 │   ├── updateCommands.ts     # update.* / redirect / relogin
-│   ├── routeRedirect.ts      # 短链路由
-│   └── todoList.ts           # TodoList 命令 + 控制台监听 + 定时任务
+│   └── routeRedirect.ts      # 短链路由
 ├── sync/
 │   ├── pageSync.ts           # PageSyncer：单页 / 全量 / 增量更新
 │   ├── moduleSync.ts         # ModuleSyncer：模块同步
@@ -372,11 +351,13 @@ client/                       # 控制台前端（Vue）
 ```
 CronService（提供 oniCron 调度器，必须最先）
   ↓
+DatabaseExtension（声明数据表）
+  ↓
 WikiBotService（提供 wikiBot 服务：登录 + 取正文）
   ↓
-ConsoleLogProvider / DatabaseExtension（提供 console 数据源与数据表）
+ConsoleLogProvider（提供 console 数据源）
   ↓
-RouteRedirect / SyncCommands / QueryCommands / UpdateCommands / TodoList / AiQueryCommands
+RouteRedirect / SyncCommands / QueryCommands / UpdateCommands / AiQueryCommands
 ```
 
 所有子插件共享**同一个配置对象**，因此注册时统一传 `config`；不需要配置的子插件会忽略它。
@@ -475,7 +456,7 @@ yarn test        # tsc 编译到 .test-build/，再用 mocha 跑
 
 ## 🔒 安全与权限
 
-- 所有写操作（同步页面 / 创建重定向 / 删除待办）需要权限 **2**
+- 所有写操作（同步页面 / 创建重定向）需要权限 **2**
 - 清空页面缓存需要权限 **4**
 - 账号密码只保存在 Koishi 配置中，不写入日志
 - 登录过期由 `WikiBotService` 内部的代理透明处理，自动重登后重放原请求
@@ -515,7 +496,7 @@ yarn test        # tsc 编译到 .test-build/，再用 mocha 跑
 bwiki 登录失败。检查 `bwikiusername` / `bwikipassword`，执行 `relogin` 重试；
 短时间内反复失败会触发限流，需等约 5 分钟。
 
-**`sync` / `update` / `todo` 命令在控制台里「消失」了**
+**`sync` / `update` 命令在控制台里「消失」了**
 这些子插件依赖 `wikiBot` / `database` / `console`。若一个必需服务没就绪，整组命令都不会注册。排查：
 1. 控制台日志里是否有 `WikiBotService 初始化失败`；
 2. 是否安装了 `@koishijs/plugin-http`（`.ai` 需要）。
