@@ -1,5 +1,4 @@
 import { Context, Logger } from "koishi";
-import {} from "koishi-plugin-cron";
 import type { NotifyConfig, ScheduleConfig } from "../config";
 import { generatePinyinInfo, logger } from "../utils/tools";
 
@@ -8,11 +7,9 @@ export interface UpdateCommandsConfig
   extends Pick<NotifyConfig, "logsUrl">, ScheduleConfig {}
 
 export class UpdateCommands {
-  /** `cron` 可选：定时刷新缓存是增强项，命令本身必须始终可用 */
   public static readonly inject = {
     database: { required: true },
     wikiBot: { required: true },
-    cron: { required: false },
   };
   public config: UpdateCommandsConfig;
   public log: Logger;
@@ -28,27 +25,30 @@ export class UpdateCommands {
   }
 
   private registerCronJobs(ctx: Context) {
-    if (typeof ctx.cron !== "function") {
-      this.log.warn(
-        "未检测到 cron 服务（koishi.yml 未启用 koishi-plugin-cron），页面缓存的定时更新已跳过",
-      );
+    const cron = ctx.oniCron;
+    if (typeof cron !== "function") {
+      this.log.warn("内置 cron 调度器未就绪，页面缓存的定时更新已跳过");
       return;
     }
 
     const cronExpression: string = this.config.updateCron || "0 2 * * *";
-    ctx.cron(cronExpression, async () => {
-      if (!this.ctx.wikiBot.isReady) {
-        this.log.warn("定时任务：WikiBot 服务未就绪，跳过页面缓存更新");
-        return;
-      }
-      this.log.info("定时任务：开始每日自动更新本地页面缓存（主站）");
-      try {
-        const result = await this.updatePageCache();
-        this.log.info(`定时任务完成：更新 ${result.count} 条页面到本地缓存`);
-      } catch (err) {
-        this.log.error("定时任务失败：自动更新页面缓存", err);
-      }
-    });
+    cron(
+      cronExpression,
+      async () => {
+        if (!this.ctx.wikiBot.isReady) {
+          this.log.warn("定时任务：WikiBot 服务未就绪，跳过页面缓存更新");
+          return;
+        }
+        this.log.info("定时任务：开始每日自动更新本地页面缓存（主站）");
+        try {
+          const result = await this.updatePageCache();
+          this.log.info(`定时任务完成：更新 ${result.count} 条页面到本地缓存`);
+        } catch (err) {
+          this.log.error("定时任务失败：自动更新页面缓存", err);
+        }
+      },
+      "每日页面缓存更新",
+    );
   }
 
   private async updatePageCache(): Promise<{ count: number }> {

@@ -19,6 +19,39 @@
 
 ---
 
+## [0.12.7] — 2026-11-22
+
+### Added
+
+- **内置 cron 调度器**（`ctx.oniCron`），彻底移除对 `koishi-plugin-cron` 的依赖：
+  - `src/utils/cron.ts`：表达式解析 + 下次触发时间计算（纯函数，可单测）。
+    支持 5 段（分 时 日 月 周）与 **6 段（秒 分 时 日 月 周）**、`*`/`N`/`a-b`/`*/n`/`a-b/n`、
+    逗号组合、月份与星期英文缩写、`@daily` 等宏；日与周同时受限时按 Vixie cron 的 OR 语义
+  - `src/services/cronScheduler.ts`：用 `ctx.setTimeout` 链式排期（插件卸载自动清理），
+    同一任务串行执行（上次未结束则跳过）、异常只记日志、支持 `cancel()` 与 `list()`
+  - `src/plugins/cronService.ts`：把调度器挂到 `ctx.oniCron`，排在 `SUB_PLUGINS` 最前
+
+### Changed
+
+- `syncCommands` / `updateCommands` / `todoList` 的定时任务改用 `ctx.oniCron(表达式, 任务, 名称)`，
+  每个任务都带可读名称，注册失败时日志能直接指出是哪一个
+- `list()` 可用于排查：`ctx.oniCron.list()` 返回 `{ id, name, expression, next }`
+
+### Removed
+
+- 移除依赖 `koishi-plugin-cron` 与 `import {} from "koishi-plugin-cron"`，
+  三个子插件的 `inject` 中不再声明 `cron`
+- 旧 `koishi.yml` 里的 `cron:xxxxxxxx: {}` 可以删掉（留着也无害，只是没人用）
+
+### Fixed
+
+- 顺带修掉 `client/tsconfig.json` 中的非法 JSON（缺逗号 + 空单引号导致 `vite` 构建失败）
+
+> **兼容性**：原 `syncCommands` 里的 `0 0 2 * * 0` 是 6 段写法（周日 02:00），
+> 新解析器默认把 6 段的第一段当秒，行为不变。
+
+---
+
 ## [0.12.6] — 2026-11-22
 
 ### Fixed
@@ -362,7 +395,8 @@
 - 页面拼音查询与模糊搜索命令
 - 定时任务（基于 `koishi-plugin-cron`）
 
-[Unreleased]: https://github.com/Charles-lf/oni-sync-bot/compare/v0.12.6...HEAD
+[Unreleased]: https://github.com/Charles-lf/oni-sync-bot/compare/v0.12.7...HEAD
+[0.12.7]: https://github.com/Charles-lf/oni-sync-bot/releases/tag/v0.12.7
 [0.12.6]: https://github.com/Charles-lf/oni-sync-bot/releases/tag/v0.12.6
 [0.12.5]: https://github.com/Charles-lf/oni-sync-bot/releases/tag/v0.12.5
 [0.12.1]: https://github.com/Charles-lf/oni-sync-bot/releases/tag/v0.12.1

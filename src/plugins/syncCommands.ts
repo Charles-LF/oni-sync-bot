@@ -2,7 +2,6 @@ import { Context } from "koishi";
 import type { NotifyConfig } from "../config";
 import { sleep } from "../utils/async";
 import { Mwn } from "mwn";
-import {} from "koishi-plugin-cron";
 import { PageSyncer, SyncNotifyItem } from "../sync/pageSync";
 import { ModuleSyncer } from "../sync/moduleSync";
 import { ImageSyncer } from "../sync/imgSync";
@@ -16,16 +15,10 @@ import { logger, formatWikiTime } from "../utils/tools";
 export type SyncCommandsConfig = NotifyConfig;
 
 export class SyncCommands {
-  /**
-   * `cron` / `http` 都是**可选**依赖：
-   * 任何一项没装，同步命令仍必须可用（只是少了定时任务）。
-   * 早期把它们写成必需项，曾在实例未启用 koishi-plugin-cron 时导致
-   * 整个子插件一直 pending，`sync` 系列命令凭空消失。
-   */
+  /** `http` 可选：缺它只影响内置模组的网络请求 */
   public static readonly inject = {
     wikiBot: { required: true },
     database: { required: true },
-    cron: { required: false },
     http: { required: false },
   };
   public config: SyncCommandsConfig;
@@ -58,53 +51,68 @@ export class SyncCommands {
 
   /** 同步相关的定时任务；cron 表达式即调度策略，集中在一处便于对照 */
   private registerScheduledTasks(ctx: Context) {
-    if (typeof ctx.cron !== "function") {
-      logger.warn(
-        "未检测到 cron 服务（koishi.yml 未启用 koishi-plugin-cron），定时同步任务已跳过；手动命令不受影响",
-      );
+    const cron = ctx.oniCron;
+    if (typeof cron !== "function") {
+      logger.warn("内置 cron 调度器未就绪，定时同步任务已跳过；手动命令不受影响");
       return;
     }
 
-    ctx.cron("15 * * * *", async () => {
-      if (!(await this.ensureBotsReady(ctx, "增量更新"))) return;
+    cron(
+      "15 * * * *",
+      async () => {
+        if (!(await this.ensureBotsReady(ctx, "增量更新"))) return;
 
-      await this.createPageSyncer(ctx).incrementalUpdate();
-    });
+        await this.createPageSyncer(ctx).incrementalUpdate();
+      },
+      "每小时增量同步",
+    );
 
-    ctx.cron("30 8 * * 4", async () => {
-      if (!(await this.ensureBotsReady(ctx, "同步所有页面"))) return;
+    cron(
+      "30 8 * * 4",
+      async () => {
+        if (!(await this.ensureBotsReady(ctx, "同步所有页面"))) return;
 
-      await this.createPageSyncer(ctx)
-        .syncAll()
-        .then(() => {
-          logger.info("自动任务：尝试同步所有页面，从 WIKIGG 到 bwiki");
-        })
-        .catch((err) => {
-          logger.error(`同步所有页面失败，错误信息：${err}`);
-        });
-    });
+        await this.createPageSyncer(ctx)
+          .syncAll()
+          .then(() => {
+            logger.info("自动任务：尝试同步所有页面，从 WIKIGG 到 bwiki");
+          })
+          .catch((err) => {
+            logger.error(`同步所有页面失败，错误信息：${err}`);
+          });
+      },
+      "每周四全量页面同步",
+    );
 
-    ctx.cron("30 8 * * 3", async () => {
-      if (!(await this.ensureBotsReady(ctx, "同步所有图片"))) return;
+    cron(
+      "30 8 * * 3",
+      async () => {
+        if (!(await this.ensureBotsReady(ctx, "同步所有图片"))) return;
 
-      await new ImageSyncer(
-        ctx.wikiBot.getGGBot(),
-        ctx.wikiBot.getBWikiBot(),
-      )
-        .syncAll()
-        .then(() => {
-          logger.info("自动任务：尝试同步所有图片，从 WIKIGG 到 bwiki");
-        })
-        .catch((err) => {
-          logger.error(`同步所有图片失败，错误信息：${err}`);
-        });
-    });
+        await new ImageSyncer(
+          ctx.wikiBot.getGGBot(),
+          ctx.wikiBot.getBWikiBot(),
+        )
+          .syncAll()
+          .then(() => {
+            logger.info("自动任务：尝试同步所有图片，从 WIKIGG 到 bwiki");
+          })
+          .catch((err) => {
+            logger.error(`同步所有图片失败，错误信息：${err}`);
+          });
+      },
+      "每周三全量图片同步",
+    );
 
-    ctx.cron("0 0 2 * * 0", async () => {
-      logger.info("⏰ 开始执行每周日贡献者同步任务");
-      await this.syncAllContributors(ctx, "定时任务");
-    });
-    logger.info("✅ 每周日贡献者定时同步任务已注册（每周日凌晨2点执行）");
+    cron(
+      "0 0 2 * * 0",
+      async () => {
+        logger.info("⏰ 开始执行每周日贡献者同步任务");
+        await this.syncAllContributors(ctx, "定时任务");
+      },
+      "每周日贡献者同步",
+    );
+    logger.info("✅ 定时同步任务已注册（每小时增量 / 每周三图片 / 每周四页面 / 每周日贡献者）");
   }
 
   private async ensureBotsReady(

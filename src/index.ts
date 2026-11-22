@@ -1,6 +1,7 @@
 import { Context } from "koishi";
 import { resolve } from "path";
 import { Config } from "./config";
+import { CronService } from "./plugins/cronService";
 import { WikiBotService } from "./services/wikiBotService";
 import { ConsoleLogProvider } from "./services/consoleLogProvider";
 import { DatabaseExtension } from "./plugins/databaseExtension";
@@ -15,8 +16,9 @@ export { Config };
 
 export const name = "oni-sync-bot";
 
-/** 子插件注册表：**顺序即依赖顺序**（WikiBotService 必须最先，它提供 wikiBot） */
+/** 子插件注册表：**顺序即依赖顺序**（CronService 提供 oniCron，WikiBotService 提供 wikiBot） */
 const SUB_PLUGINS = [
+  CronService,
   WikiBotService,
   ConsoleLogProvider,
   DatabaseExtension,

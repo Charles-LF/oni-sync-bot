@@ -86,17 +86,11 @@ npm uninstall vectra @huggingface/transformers   # 0.12.0 起不再需要
 - `@koishijs/plugin-server`（短链路由）
 - `@koishijs/plugin-console`（控制台页面与日志查看）
 - `@koishijs/plugin-http`（调用 DeepSeek 接口）
-- `koishi-plugin-cron`（定时任务，**可选**：未启用时 `sync.*` / `update` / `todolist` 命令照常可用，
-  只是不会自动跑增量同步等定时任务，启动时会打一条警告）
 - 任意适配器（可选；QQ 适配器才能看到 markdown 按钮效果）
 
-> 若需要定时任务，请在 `koishi.yml` 里补一项（插件名 `cron`）：
->
-> ```yaml
-> plugins:
->   group:basic:
->     cron:xxxxxxxx: {}
-> ```
+> **定时任务不依赖 `koishi-plugin-cron`**：插件内置了 `ctx.oniCron` 调度器
+> （`src/utils/cron.ts` + `src/services/cronScheduler.ts`），随插件一起加载。
+> 从旧版本升级时可以把 `koishi.yml` 里的 `cron:xxxxxxxx: {}` 删掉。
 
 ## ⚙️ 配置项
 
@@ -201,7 +195,7 @@ npm uninstall vectra @huggingface/transformers   # 0.12.0 起不再需要
 
 | 阶段 | RSS |
 | ---- | --- |
-| Koishi + sqlite + http + cron 基线 | 约 103 MB |
+| Koishi + sqlite + http 基线 | 约 103 MB |
 | 一次问答（mwn 抓 1 页 + cheerio 解析 + 正文缓存 3 KB） | 峰值增加 < 20 MB |
 | 旧方案（q8 Embedding 模型 + 1 万块向量索引常驻） | 282 MB |
 
@@ -270,6 +264,10 @@ npm uninstall vectra @huggingface/transformers   # 0.12.0 起不再需要
 
 ## ⏰ 定时任务
 
+调度由插件内置的 `ctx.oniCron`（`src/services/cronScheduler.ts`）负责，**不再依赖 `koishi-plugin-cron`**。
+表达式支持 5 段（分 时 日 月 周）与 6 段（秒 分 时 日 月 周，兼容旧写法），
+本地时区，`ctx.setTimeout` 排期（插件卸载时自动清理）。
+
 | cron           | 时间            | 任务                    | 说明                                   |
 | -------------- | --------------- | ----------------------- | -------------------------------------- |
 | `15 * * * *`   | 每小时第 15 分  | 增量更新                | 同步最近 3 小时的编辑                  |
@@ -279,6 +277,9 @@ npm uninstall vectra @huggingface/transformers   # 0.12.0 起不再需要
 | `0 0 2 * * 0`  | 每周日 02:00    | 同步所有贡献者          | —                                      |
 | `0 0 * * 1`    | 每周一 00:00    | 同步模块到 TodoList     | 拉取 `Module:` 命名空间页面写入待办     |
 | `0 0 * * 2`    | 每周二 00:00    | 检查模块同步状态        | 对比两侧修订时间，自动标记完成 / 未完成 |
+
+> 表达式写错时只记一条错误日志并跳过该任务，不会影响插件启动。
+> 需要查看已注册的任务与下次触发时间，可在控制台调试里执行 `ctx.oniCron.list()`。
 
 ## 🔌 路由接口
 
@@ -321,11 +322,13 @@ src/
 ├── config.ts                 # 配置的唯一声明处（账号 / 站点 / 通知 / 定时 / AI）
 ├── services/
 │   ├── wikiBotService.ts     # wikiBot 服务：登录、代理、透明重登录、fetchPagePlainText
+│   ├── cronScheduler.ts      # 内置 cron 调度器（ctx.oniCron）
 │   ├── aiService.ts          # DeepSeek 客户端（Function Calling）+ 两套提示词
 │   ├── aiMemory.ts           # 追问记忆（用户 / 群话题）与上下文选择
 │   ├── messageRenderer.ts    # QQ markdown+按钮 / 纯文本 的渲染
 │   └── consoleLogProvider.ts # 控制台日志服务（onilogs）
 ├── plugins/
+│   ├── cronService.ts        # 挂载 ctx.oniCron
 │   ├── databaseExtension.ts  # wikipages / oniaimemory 表定义
 │   ├── queryCommands.ts      # x / 查wiki
 │   ├── aiQueryCommands.ts    # ai / ai.status（Agent 调度）
@@ -339,6 +342,7 @@ src/
 │   └── imgSync.ts            # ImageSyncer：图片同步
 └── utils/
     ├── tools.ts              # 拼音、时间格式化、标题规范化、站点 URL 规范化等
+    ├── cron.ts               # cron 表达式解析与下次触发时间（纯函数，可单测）
     ├── renderText.ts         # HTML → 纯文本（纯函数，可单测）
     ├── async.ts              # sleep + withRetry（全项目统一的重试语义）
     └── matcher.ts            # 查询打分与模糊匹配（纯函数，可单测）
@@ -354,7 +358,9 @@ client/                       # 控制台前端（Vue）
 [`src/index.ts`](src/index.ts) 是唯一的组合根。它按**依赖顺序**注册一组子插件：
 
 ```
-WikiBotService（提供 wikiBot 服务：登录 + 取正文，必须最先）
+CronService（提供 oniCron 调度器，必须最先）
+  ↓
+WikiBotService（提供 wikiBot 服务：登录 + 取正文）
   ↓
 ConsoleLogProvider / DatabaseExtension（提供 console 数据源与数据表）
   ↓
@@ -498,11 +504,12 @@ bwiki 登录失败。检查 `bwikiusername` / `bwikipassword`，执行 `relogin`
 短时间内反复失败会触发限流，需等约 5 分钟。
 
 **`sync` / `update` / `todo` 命令在控制台里「消失」了**
-这些子插件依赖 `wikiBot` / `database`，并把 `cron` 声明为**可选**依赖。
-若一个必需服务没就绪，整组命令都不会注册。排查：
+这些子插件依赖 `wikiBot` / `database` / `console`。若一个必需服务没就绪，整组命令都不会注册。排查：
 1. 控制台日志里是否有 `WikiBotService 初始化失败`；
-2. 是否安装了 `@koishijs/plugin-http`（`.ai` 需要）；
-3. 未启用 `koishi-plugin-cron` 只影响定时任务，会在启动日志里打一条黄色警告。
+2. 是否安装了 `@koishijs/plugin-http`（`.ai` 需要）。
+
+> 定时任务已内置（`ctx.oniCron`），与 `koishi-plugin-cron` 无关；
+> 若启动日志出现「内置 cron 调度器未就绪」，通常是子插件注册顺序被改动了。
 
 **内存占用偏高**
 - 0.12.0 起已不再加载本地模型，RSS 应回到 100~130 MB；若仍偏高，检查是否还装着旧版插件目录；

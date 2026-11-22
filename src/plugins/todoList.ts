@@ -20,7 +20,6 @@ interface ModuleRevision {
   /** 已选出的最新修订，便于调用方直接读取 */
   revision: RevisionEntry;
 }
-import {} from "koishi-plugin-cron";
 
 declare module "koishi" {
   interface Tables {
@@ -57,12 +56,10 @@ export interface OniTodoItem {
 }
 
 export class TodoList {
-  /** `cron` 可选：未启用定时任务插件时，TodoList 的命令与控制台仍需可用 */
   public static readonly inject = {
     database: { required: true },
     console: { required: true },
     wikiBot: { required: true },
-    cron: { required: false },
   };
   public log: Logger;
 
@@ -92,40 +89,47 @@ export class TodoList {
   }
 
   private registerCronJobs(ctx: Context) {
-    if (typeof ctx.cron !== "function") {
-      this.log.warn(
-        "未检测到 cron 服务（koishi.yml 未启用 koishi-plugin-cron），TodoList 的定时任务已跳过",
-      );
+    const cron = ctx.oniCron;
+    if (typeof cron !== "function") {
+      this.log.warn("内置 cron 调度器未就绪，TodoList 的定时任务已跳过");
       return;
     }
 
-    ctx.cron("0 0 * * 1", async () => {
-      if (!this.ctx.wikiBot.isReady) {
-        this.log.warn("定时任务：WikiBot 服务未就绪，跳过同步模块");
-        return;
-      }
-      this.log.info("定时任务：每周一同步 wiki.gg 模块到 TodoList");
-      try {
-        const { added, updated } = await this.syncModulesToTodos();
-        this.log.info(`定时任务完成：新增 ${added} 个，更新 ${updated} 个`);
-      } catch (err) {
-        this.log.error("定时任务失败：同步模块", err);
-      }
-    });
+    cron(
+      "0 0 * * 1",
+      async () => {
+        if (!this.ctx.wikiBot.isReady) {
+          this.log.warn("定时任务：WikiBot 服务未就绪，跳过同步模块");
+          return;
+        }
+        this.log.info("定时任务：每周一同步 wiki.gg 模块到 TodoList");
+        try {
+          const { added, updated } = await this.syncModulesToTodos();
+          this.log.info(`定时任务完成：新增 ${added} 个，更新 ${updated} 个`);
+        } catch (err) {
+          this.log.error("定时任务失败：同步模块", err);
+        }
+      },
+      "每周一收集模块待办",
+    );
 
-    ctx.cron("0 0 * * 2", async () => {
-      if (!this.ctx.wikiBot.isReady) {
-        this.log.warn("定时任务：WikiBot 服务未就绪，跳过检查同步状态");
-        return;
-      }
-      this.log.info("定时任务：每周二检查模块同步状态");
-      try {
-        const { checked, synced } = await this.checkSyncStatus();
-        this.log.info(`定时任务完成：检查 ${checked} 个，已同步 ${synced} 个`);
-      } catch (err) {
-        this.log.error("定时任务失败：检查同步状态", err);
-      }
-    });
+    cron(
+      "0 0 * * 2",
+      async () => {
+        if (!this.ctx.wikiBot.isReady) {
+          this.log.warn("定时任务：WikiBot 服务未就绪，跳过检查同步状态");
+          return;
+        }
+        this.log.info("定时任务：每周二检查模块同步状态");
+        try {
+          const { checked, synced } = await this.checkSyncStatus();
+          this.log.info(`定时任务完成：检查 ${checked} 个，已同步 ${synced} 个`);
+        } catch (err) {
+          this.log.error("定时任务失败：检查同步状态", err);
+        }
+      },
+      "每周二检查同步状态",
+    );
   }
 
   private async getAllModulesFromGG(): Promise<Array<{ title: string }>> {
