@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {
   AccountConfig,
   AiConfig,
+  DeltaSyncConfig,
   NotifyConfig,
   ScheduleConfig,
   SiteConfig,
@@ -21,6 +22,7 @@ const GROUPS = {
   SiteConfig,
   NotifyConfig,
   ScheduleConfig,
+  DeltaSyncConfig,
   AiConfig,
 };
 
@@ -62,11 +64,18 @@ describe("插件配置 schema", () => {
       "main_site",
       "bwiki_site",
       // 通知
-      "logsUrl",
       "notifyGroupIds",
       "notifyBotPlatform",
       // 定时任务
       "updateCron",
+      // 增量同步
+      "syncCron",
+      "syncLogLimit",
+      "syncCheckImages",
+      "syncMaxPagesPerRun",
+      "syncMaxImagesPerRun",
+      "syncOverlapSeconds",
+      "syncFallbackHours",
       // AI 问答
       "aiEnabled",
       "deepseekApiKey",

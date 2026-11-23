@@ -21,7 +21,7 @@
 - **增量同步（默认调度）** — 基于**持久化水位**的变更检测：只处理上次成功之后新产生的编辑，
   页面走 `recentchanges`、图片走 `allimages + imageinfo` 指纹比对，不再每小时盲目回溯固定窗口
 
-### ⚙️ 同步运维面板（控制台 `/onisync`）
+### ⚙️ 同步运维面板（控制台首页 `/`）
 
 - **四个任务卡片** — 增量同步 / 全量页面 / 全量图片 / 全量模块，各自独立的状态与进度
 - **增量同步自动运行** — 由配置里的 cron 驱动，卡片上只读展示优先级与进度，不提供任何控制按钮
@@ -59,13 +59,6 @@
 > Wikitext 源码**只**用于同步，永远不会进入 AI 链路。AI 只看到渲染后的纯文本。
 > 正文按页缓存 10 分钟（最多 50 页），群里反复问同一页不会重复请求 bwiki。
 
-### 🗂️ 日志中心
-
-- **落库保留** — 本插件日志自动写入 `onilogs` 表，最多保留 3000 条，重启后仍能查看历史
-- **分模块呈现** — 增量更新 / 全量同步 / 登录 / AI 问答 / 定时任务等自动归类，互不混淆
-- **筛选检索** — 按级别、模块、时间范围筛选，支持关键词搜索与详情展开
-- **控制台界面** — 跟随 Koishi 明暗主题，移动端自适应
-
 ### 🔌 路由
 
 - **短链跳转** — `/gg/:id`、`/bw/:id` 按数据库中的页面 ID 跳转
@@ -94,9 +87,9 @@ npm uninstall vectra @huggingface/transformers   # 0.12.0 起不再需要
 
 插件需要以下 Koishi 插件（通常已随 Koishi 提供）：
 
-- `@koishijs/plugin-database`（`wikipages` / `oniaimemory` / `onilogs` 持久化）
+- `@koishijs/plugin-database`（`wikipages` / `oniaimemory` / `sync_*` 持久化）
 - `@koishijs/plugin-server`（短链路由）
-- `@koishijs/plugin-console`（控制台页面与日志查看）
+- `@koishijs/plugin-console`（控制台同步运维页面）
 - `@koishijs/plugin-http`（调用 DeepSeek 接口）
 - 任意适配器（可选；QQ 适配器才能看到 markdown 按钮效果）
 
@@ -117,7 +110,6 @@ npm uninstall vectra @huggingface/transformers   # 0.12.0 起不再需要
 | `domain`              | 站点     | 短链域名（用于生成按钮与提示里的链接）                  | `klei.vip`                     |
 | `main_site`           | 站点     | 主站域名（GG 原站）                                     | `oxygennotincluded.wiki.gg/zh` |
 | `bwiki_site`          | 站点     | 镜像站域名（bwiki）                                     | `wiki.biligame.com/oni`        |
-| `logsUrl`             | 通知     | 日志查看地址，出现在命令回复里                          | `https://klei.vip/onilogs`     |
 | `notifyGroupIds`      | 通知     | 增量同步成功后通知的群频道 ID 列表；留空则不通知        | `[]`                           |
 | `notifyBotPlatform`   | 通知     | 发送通知所用的 bot 平台标识                             | `qq`                           |
 | `updateCron`          | 定时     | 页面缓存自动更新的 cron 表达式                          | `0 2 * * *`（每天 02:00）      |
@@ -306,7 +298,7 @@ npm uninstall vectra @huggingface/transformers   # 0.12.0 起不再需要
 | `0 2 * * *`    | 每天 02:00      | 页面缓存自动更新        | 由 `updateCron` 配置，默认值如左                |
 | `0 0 2 * * 0`  | 每周日 02:00    | 同步所有贡献者          | —                                               |
 
-> 全量页面 / 全量图片 / 全量模块**不参与定时**，只能在 `/onisync` 面板手动开始（权限 4）。
+> 全量页面 / 全量图片 / 全量模块**不参与定时**，只能在同步运维面板（控制台首页 `/`）手动开始（权限 4）。
 > 增量同步的表达式写死在配置里，控制台不提供修改入口，避免运行时改 cron 与排期打架。
 > 表达式写错时只记一条错误日志并跳过该任务，不会影响插件启动。
 > 需要查看已注册的任务与下次触发时间，可在控制台调试里执行 `ctx.oniCron.list()`。
@@ -327,26 +319,26 @@ npm uninstall vectra @huggingface/transformers   # 0.12.0 起不再需要
 | ----------- | --------------------------------------------------------------------------------------------------------------- |
 | `wikipages` | `id`、`title`、`pinyin_full`、`pinyin_first`、`contributor`、`change_time`                                       |
 | `oniaimemory` | `id`（主键=记忆键）、`payload`（JSON）、`updated_at`（毫秒时间戳）                                       |
-| `onilogs`   | `id`（自增）、`time`、`level`、`name`、`scope`、`message`（最多保留 3000 条）                                     |
 | `sync_logs` | `id`（主键 = rcid）、`title`、`user`、`timestamp`（ISO）、`comment`、`sizeDiff`、`diffHtml`、`revid`、`parentid`、`ns` |
-| `sync_config` | `key`（主键）、`value` —— 存 `last_sync_time` / `cron_schedule` / `last_result`                                 |
+| `sync_config` | `key`（主键）、`value` —— 存 `last_sync_time` / `last_result:<任务>`                                            |
 | `sync_images` | `title`（主键）、`timestamp`、`sha1`、`synced_at` —— 图片增量比对用的指纹                                     |
 
-`wikipages` / `oniaimemory` / `onilogs` / `sync_*` 通过 `Tables` 接口增强声明（见 `databaseExtension.ts`）。
+`wikipages` / `oniaimemory` / `sync_*` 通过 `Tables` 接口增强声明（见 `databaseExtension.ts`）。
 
 > 0.12.0 起不再维护 `wikitexts` 表（渲染文本改为按需抓取），0.12.5 起连表声明也移除了。
 > 0.14.0 起不再有 `onitodos` 表（TodoList 功能已移除）。
-> 旧库里的这两张表不会被自动删除，但插件**不会再读写它们**，可以自行 `DROP TABLE wikitexts` / `DROP TABLE onitodos` 回收空间。
+> 0.17.0 起不再有 `onilogs` 表（日志中心页面已被「同步运维」取代）。
+> 旧库里的这三张表不会被自动删除，但插件**不会再读写它们**，可以自行
+> `DROP TABLE wikitexts` / `DROP TABLE onitodos` / `DROP TABLE onilogs` 回收空间。
 
 ## 🎨 控制台界面
 
-插件在 Koishi 控制台注册三个页面（见 [`client/index.ts`](client/index.ts)）：
+插件在 Koishi 控制台注册两个页面（见 [`client/index.ts`](client/index.ts)）：
 
-| 页面           | 源码位置                  | 功能                                        |
-| -------------- | ------------------------- | ------------------------------------------- |
-| 同步机器人首页 | `client/onilogs/`         | 日志中心：按模块 / 级别 / 时间筛选与检索（最多保留 3000 条） |
-| 同步运维       | `client/onisync/`         | 任务控制面板 + 最近更改列表（diff 抽屉）     |
-| 火箭计算器     | `client/Rocketcalculator/`| ONI 火箭设计计算器                          |
+| 页面       | 路径          | 源码位置                   | 功能                                        |
+| ---------- | ------------- | -------------------------- | ------------------------------------------- |
+| 同步运维   | `/`（首页）   | `client/onisync/`          | 任务卡片 + 进度 + 最近更改列表（diff 抽屉）  |
+| 火箭计算器 | `/calculator` | `client/Rocketcalculator/` | ONI 火箭设计计算器                          |
 
 ### 同步运维面板
 
@@ -365,15 +357,6 @@ npm uninstall vectra @huggingface/transformers   # 0.12.0 起不再需要
 - diff 用 `difftype=unified` 拉取后在客户端按行着色（`+` 绿 / `-` 红 / `@@` 紫），
   比整表 HTML 小一个数量级，也不会出现左右两栏重复显示的问题
 
-### 日志中心
-
-- 只收录本插件（`oni-sync` / `oni-*`）的日志，其它插件的日志不会进库
-- 自动归类成「增量更新 / 全量页面同步 / 模块同步 / 图片同步 / 贡献者同步 / 登录 / AI 问答 /
-  Wiki 客户端 / 定时任务 / 日志系统」等模块，登录、定时任务、增量更新互不干扰
-- 级别 tab 与模块下拉的数字是**联动**的：选中模块后，tab 上的数字只统计该模块
-- 点击任意一行展开详情（完整时间、来源 logger、序号、可换行原文）；滚到顶部自动加载更早的日志
-- 清空按钮需要控制台权限 1；历史日志最多保留 3000 条，超出的旧日志会自动删除
-
 
 ## 📦 项目结构
 
@@ -387,14 +370,12 @@ src/
 │   ├── aiService.ts          # DeepSeek 客户端（Function Calling）+ 两套提示词
 │   ├── aiMemory.ts           # 追问记忆（用户 / 群话题）与上下文选择
 │   ├── messageRenderer.ts    # QQ markdown+按钮 / 纯文本 的渲染
-│   ├── logStore.ts           # 日志仓库：内存 3000 条 + 节流落库 + 模块归类
 │   ├── syncRepository.ts     # 水位 / 最近更改 / 图片指纹的持久化
-│   ├── syncTaskManager.ts    # 任务状态机 + 协作式取消令牌（pausable / stoppable）
-│   └── consoleLogProvider.ts # 控制台日志服务（onilogs）
+│   └── syncTaskManager.ts    # 多任务状态机 + 协作式取消令牌（pausable / stoppable）
 ├── plugins/
 │   ├── cronService.ts        # 挂载 ctx.oniCron
-│   ├── databaseExtension.ts  # wikipages / oniaimemory / onilogs / sync_* 表定义
-│   ├── syncConsole.ts        # 同步运维面板：任务控制 / 最近更改 / 动态 cron（ctx.syncConsole）
+│   ├── databaseExtension.ts  # wikipages / oniaimemory / sync_* 表定义
+│   ├── syncConsole.ts        # 同步运维面板：任务控制 / 最近更改（ctx.syncConsole）
 │   ├── queryCommands.ts      # x / 查wiki
 │   ├── aiQueryCommands.ts    # ai / ai.status（Agent 调度）
 │   ├── syncCommands.ts       # sync.* 命令 + 贡献者定时任务
@@ -429,9 +410,7 @@ DatabaseExtension（声明数据表）
   ↓
 WikiBotService（提供 wikiBot 服务：登录 + 取正文）
   ↓
-ConsoleLogProvider（提供 console 数据源）
-  ↓
-SyncConsole（提供 syncConsole：增量任务 + 最近更改 + 动态 cron）
+SyncConsole（提供 syncConsole：四个同步任务 + 最近更改 + 控制台数据源）
   ↓
 RouteRedirect / SyncCommands / QueryCommands / UpdateCommands / AiQueryCommands
 ```
@@ -535,7 +514,7 @@ yarn test        # tsc 编译到 .test-build/，再用 mocha 跑
 | 操作 | 权限 |
 | ---- | ---- |
 | 增量同步（命令 / 自动调度） | **1** |
-| 查看同步状态、日志、最近更改 | 0 ~ 1 |
+| 查看同步状态、最近更改 | 0 ~ 1 |
 | 全量 / 单页 / 单图 / 贡献者同步命令 | **4** |
 | 控制台里的开始 / 暂停 / 继续 / 停止 | **4** |
 | 清空页面缓存（`update.delete`） | **4** |

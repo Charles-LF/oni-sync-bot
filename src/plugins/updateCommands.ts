@@ -1,10 +1,9 @@
 import { Context, Logger } from "koishi";
-import type { NotifyConfig, ScheduleConfig } from "../config";
+import type { ScheduleConfig } from "../config";
 import { generatePinyinInfo, logger } from "../utils/tools";
 
-/** 日志地址来自 NotifyConfig，cron 表达式来自 ScheduleConfig（见 src/config.ts） */
-export interface UpdateCommandsConfig
-  extends Pick<NotifyConfig, "logsUrl">, ScheduleConfig {}
+/** cron 表达式来自 ScheduleConfig（见 src/config.ts） */
+export interface UpdateCommandsConfig extends ScheduleConfig {}
 
 export class UpdateCommands {
   public static readonly inject = {

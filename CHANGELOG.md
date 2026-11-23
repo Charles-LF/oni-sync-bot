@@ -19,6 +19,30 @@
 
 ---
 
+## [0.17.0] — 2026-11-24
+
+> 「同步运维」直接成为首页，独立的日志中心（`onilogs`）整块移除。
+
+### Changed
+
+- 首页 `/` 改为「同步运维」面板；控制台只剩 **同步运维** 与 **火箭计算器** 两个页面
+  - 首页复用内置页面的 `home` 路由位，注册后需强制重新解析一次当前路由，否则仍会渲染内置欢迎页
+- 命令回复里不再拼日志页地址，统一提示「详见控制台「同步运维」」
+
+### Removed
+
+- 移除日志中心整条链路：
+  - `client/onilogs/`（页面 + 日志列表组件）
+  - `src/services/logStore.ts`、`src/services/consoleLogProvider.ts`
+  - `onilogs` 表定义、`onilogs/query` / `onilogs/clear` 控制台事件
+  - `tests/logStore.spec.ts`
+- 移除配置项 `logsUrl`（旧 `koishi.yml` 里残留不会报错，只是不再生效）
+
+> 旧库里的 `onilogs` 表不会被自动删除，可以自行 `DROP TABLE onilogs` 回收空间；
+> 需要看原始运行日志时，用 Koishi 自带的 logger 页面/控制台即可。
+
+---
+
 ## [0.16.0] — 2026-11-24
 
 > 按使用反馈重做「同步运维」面板：四个任务卡片、增量自动且优先级最高、其余任务手动并可互相让路，

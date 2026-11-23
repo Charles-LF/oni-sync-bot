@@ -40,17 +40,13 @@ export const AccountConfig: Schema<AccountConfig> = Schema.object({
   bwikipassword: Schema.string().description("bwiki密码").default("1"),
 });
 
-/** 日志地址与同步结果通知 */
+/** 同步结果群通知 */
 export interface NotifyConfig {
-  logsUrl: string;
   notifyGroupIds?: string[];
   notifyBotPlatform?: string;
 }
 
 export const NotifyConfig: Schema<NotifyConfig> = Schema.object({
-  logsUrl: Schema.string()
-    .description("日志查看地址")
-    .default("https://klei.vip/onilogs"),
   notifyGroupIds: Schema.array(Schema.string())
     .description(
       '增量更新同步成功时通知的群频道ID列表，如 ["group:123456"]，留空则不发送通知',

@@ -3,7 +3,6 @@ import { resolve } from "path";
 import { Config } from "./config";
 import { CronService } from "./plugins/cronService";
 import { WikiBotService } from "./services/wikiBotService";
-import { ConsoleLogProvider } from "./services/consoleLogProvider";
 import { DatabaseExtension } from "./plugins/databaseExtension";
 import { RouteRedirect } from "./plugins/routeRedirect";
 import { SyncConsole } from "./plugins/syncConsole";
@@ -21,7 +20,6 @@ const SUB_PLUGINS = [
   CronService,
   DatabaseExtension,
   WikiBotService,
-  ConsoleLogProvider,
   SyncConsole,
   RouteRedirect,
   SyncCommands,

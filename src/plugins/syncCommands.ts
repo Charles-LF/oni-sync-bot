@@ -88,7 +88,7 @@ export class SyncCommands {
         }
         try {
           await this.createPageSyncer(ctx).syncOne(pageTitle, "sync-bot");
-          return `✅ 已尝试同步页面：${pageTitle}，请前往控制台查看：${this.config.logsUrl}`;
+          return `✅ 已尝试同步页面：${pageTitle}`;
         } catch (err) {
           logger.error(`同步页面 ${pageTitle} 失败，错误信息：${err}`);
           return `❌ 同步页面失败：${pageTitle}`;
@@ -103,7 +103,7 @@ export class SyncCommands {
       .action(async ({ session }) => {
         const result = await ctx.syncConsole.startDelta("command");
         return result.ok
-          ? `✅ ${result.message}，完成后可前往控制台查看：${this.config.logsUrl}`
+          ? `✅ ${result.message}，详见控制台「同步运维」`
           : `⚠️ ${result.message}`;
       });
 
@@ -147,10 +147,10 @@ export class SyncCommands {
         }
         try {
           await this.createPageSyncer(ctx).syncAll();
-          return `✅ 已尝试同步所有页面，请前往控制台查看：${this.config.logsUrl}`;
+          return `✅ 已尝试同步所有页面，详见控制台「同步运维」`;
         } catch (err) {
           logger.error(`同步所有页面失败，错误信息：${err}`);
-          return `❌ 同步所有页面失败，请前往控制台查看日志:${this.config.logsUrl}`;
+          return `❌ 同步所有页面失败，详见控制台「同步运维」`;
         }
       });
 
@@ -167,7 +167,7 @@ export class SyncCommands {
             ctx.wikiBot.getGGBot(),
             ctx.wikiBot.getBWikiBot(),
           ).syncOne(moduleTitle, "sync-bot");
-          return `✅ 已尝试同步模块：${moduleTitle}，请前往控制台查看：${this.config.logsUrl}`;
+          return `✅ 已尝试同步模块：${moduleTitle}`;
         } catch (err) {
           logger.error(`同步模块 ${moduleTitle} 失败，错误信息：${err}`);
           return `❌ 同步模块失败：${moduleTitle}`;
@@ -185,10 +185,10 @@ export class SyncCommands {
             ctx.wikiBot.getGGBot(),
             ctx.wikiBot.getBWikiBot(),
           ).syncAll();
-          return `✅ 已尝试同步所有模块，请前往控制台查看：${this.config.logsUrl}`;
+          return `✅ 已尝试同步所有模块，详见控制台「同步运维」`;
         } catch (err) {
           logger.error(`同步所有模块失败，错误信息：${err}`);
-          return `❌ 同步所有模块失败，请前往控制台查看日志:${this.config.logsUrl}`;
+          return `❌ 同步所有模块失败，详见控制台「同步运维」`;
         }
       });
 
@@ -223,10 +223,10 @@ export class SyncCommands {
             ctx.wikiBot.getGGBot(),
             ctx.wikiBot.getBWikiBot(),
           ).syncAll();
-          return `✅ 已尝试同步所有图片，请前往控制台查看：${this.config.logsUrl}`;
+          return `✅ 已尝试同步所有图片，详见控制台「同步运维」`;
         } catch (err) {
           logger.error(`同步所有图片失败，错误信息：${err}`);
-          return `❌ 同步所有图片失败，请前往控制台查看日志:${this.config.logsUrl}`;
+          return `❌ 同步所有图片失败，详见控制台「同步运维」`;
         }
       });
 
