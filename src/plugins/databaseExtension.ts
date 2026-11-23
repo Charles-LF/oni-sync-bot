@@ -5,6 +5,9 @@ declare module "koishi" {
     wikipages: WikiPages;
     oniaimemory: OniAiMemory;
     onilogs: OniLogRow;
+    sync_logs: SyncLogRow;
+    sync_config: SyncConfigRow;
+    sync_images: SyncImageRow;
   }
 }
 
@@ -46,6 +49,48 @@ export interface OniLogRow {
   message: string;
 }
 
+/**
+ * 最近更改记录（控制台「同步运维」页面展示，条数上限见 `syncLogLimit`）。
+ *
+ * `id` 直接用 MediaWiki 的 `rcid`，天然去重：同一轮重复拉取不会写两遍。
+ */
+export interface SyncLogRow {
+  /** rcid 字符串形式 */
+  id: string;
+  title: string;
+  user: string;
+  /** ISO 8601 时间串，字典序即时间序 */
+  timestamp: string;
+  comment: string;
+  /** 新长度 - 旧长度 */
+  sizeDiff: number;
+  /** 缓存的 diff HTML（点击详情时按需抓取并落库） */
+  diffHtml: string;
+  /** 修订 id 与父修订 id，用于按需请求 diff */
+  revid: string;
+  parentid: string;
+  /** 命名空间编号，0 为主命名空间 */
+  ns: number;
+}
+
+/** 同步配置键值对（`last_sync_time` / `cron_schedule` …） */
+export interface SyncConfigRow {
+  key: string;
+  value: string;
+}
+
+/** 已同步图片的指纹，用于增量比对 */
+export interface SyncImageRow {
+  /** 页面标题，如 `File:Icon Building.png` */
+  title: string;
+  /** 源站 imageinfo 的 timestamp */
+  timestamp: string;
+  /** 源站 sha1 */
+  sha1: string;
+  /** 最近一次成功同步（含「内容一致」）的毫秒时间戳，0 表示尚未核验 */
+  synced_at: number;
+}
+
 export class DatabaseExtension {
   public static readonly inject = ["database"];
 
@@ -80,6 +125,43 @@ export class DatabaseExtension {
         message: "text",
       },
       { primary: "id", autoInc: true },
+    );
+
+    ctx.model.extend(
+      "sync_logs",
+      {
+        id: "string",
+        title: "string",
+        user: "string",
+        timestamp: "string",
+        comment: "string",
+        sizeDiff: "integer",
+        diffHtml: "text",
+        revid: "string",
+        parentid: "string",
+        ns: "integer",
+      },
+      { primary: "id" },
+    );
+
+    ctx.model.extend(
+      "sync_config",
+      {
+        key: "string",
+        value: "text",
+      },
+      { primary: "key" },
+    );
+
+    ctx.model.extend(
+      "sync_images",
+      {
+        title: "string",
+        timestamp: "string",
+        sha1: "string",
+        synced_at: "integer",
+      },
+      { primary: "title" },
     );
   }
 }

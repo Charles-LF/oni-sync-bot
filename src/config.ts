@@ -72,6 +72,51 @@ export const ScheduleConfig: Schema<ScheduleConfig> = Schema.object({
     .default("0 2 * * *"),
 });
 
+/** 增量同步（变更检测） */
+export interface DeltaSyncConfig {
+  syncCron: string;
+  syncLogLimit: number;
+  syncCheckImages: boolean;
+  syncMaxPagesPerRun: number;
+  syncMaxImagesPerRun: number;
+  syncOverlapSeconds: number;
+  syncFallbackHours: number;
+}
+
+export const DeltaSyncConfig: Schema<DeltaSyncConfig> = Schema.object({
+  syncCron: Schema.string()
+    .description(
+      "增量同步 cron 表达式（默认每小时第 15 分）。可在控制台「同步运维」页动态修改",
+    )
+    .default("15 * * * *"),
+  syncLogLimit: Schema.natural()
+    .description("最近更改记录的保留条数（控制台列表上限）")
+    .default(5000)
+    .min(200)
+    .max(50000),  syncCheckImages: Schema.boolean()
+    .description("增量同步时一并比对图片（关闭则只同步页面）")
+    .default(true),
+  syncMaxPagesPerRun: Schema.natural()
+    .description("单轮最多同步的页面数，超出部分留到下一轮")
+    .default(300)
+    .min(1)
+    .max(5000),
+  syncMaxImagesPerRun: Schema.natural()
+    .description("单轮最多同步的图片数")
+    .default(100)
+    .min(1)
+    .max(2000),
+  syncOverlapSeconds: Schema.natural()
+    .description("拉取起始时间向前偏移的秒数，抵消 MediaWiki 写入延迟（默认 10）")
+    .default(10)
+    .max(300),
+  syncFallbackHours: Schema.natural()
+    .description("首次运行（无水位）时向前回溯的小时数")
+    .default(3)
+    .min(1)
+    .max(168),
+});
+
 /** DeepSeek 问答 */
 export interface AiConfig {
   aiEnabled: boolean;
@@ -144,6 +189,7 @@ export interface Config
     SiteConfig,
     NotifyConfig,
     ScheduleConfig,
+    DeltaSyncConfig,
     AiConfig {}
 
 export const Config: Schema<Config> = Schema.intersect([
@@ -151,5 +197,6 @@ export const Config: Schema<Config> = Schema.intersect([
   SiteConfig,
   NotifyConfig,
   ScheduleConfig,
+  DeltaSyncConfig,
   AiConfig,
 ] as const);

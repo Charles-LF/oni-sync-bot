@@ -14,11 +14,22 @@
 
 - **双站点登录** — 同时登录 GG 原站与 bwiki，登录失败自动重试（3 次，间隔 5 秒）
 - **透明重登录** — 请求过程中一旦发现登录态失效（`assert=user`），自动重新登录并**重放该请求**，调用方无感知
-- **页面同步** — 单个页面 / 全量页面
+- **页面同步** — 单个页面 / 全量页面（全量仅保留为手动命令，不再定时跑）
 - **模块同步** — `Module:` 命名空间页面（含 `Dev:` → `Module:Dev/` 路径映射）
 - **图片同步** — 下载原站图片并上传到 bwiki，支持 SHA1 比对跳过与旧版本清理
 - **贡献者同步** — 单页 / 全量同步贡献者与最后修改时间
-- **增量更新** — 每小时取最近 3 小时的 `recentchanges` 并同步
+- **增量同步（默认调度）** — 基于**持久化水位**的变更检测：只处理上次成功之后新产生的编辑，
+  页面走 `recentchanges`、图片走 `allimages + imageinfo` 指纹比对，不再每小时盲目回溯固定窗口
+
+### ⚙️ 同步运维面板（控制台 `/onisync`）
+
+- **任务状态机** — `idle / running / paused / stopped`，同一时刻只允许一个任务
+- **可控中断** — 开始 / 暂停 / 继续 / 停止；取消是**协作式**的，只在两个页面之间检查，
+  绝不会打断进行中的 mwn 请求，也不会把任务卡死
+- **实时进度** — 阶段（拉取变更 / 同步页面 / 检查图片）、进度条、同步 / 跳过 / 失败计数
+- **动态定时** — 直接在页面里改 cron 表达式，保存后立刻重排下一次触发（写库持久化）
+- **最近更改** — 落库的 `recentchanges` 列表（默认保留 5000 条），支持关键词检索、分页、
+  点开查看从原站实时抓取的 diff
 
 ### 🔍 页面查询
 
@@ -94,21 +105,28 @@ npm uninstall vectra @huggingface/transformers   # 0.12.0 起不再需要
 
 ## ⚙️ 配置项
 
-配置 schema 的**唯一声明处**是 [`src/config.ts`](src/config.ts)，分为五个分组：账号、站点、通知、定时任务、AI 问答。
+配置 schema 的**唯一声明处**是 [`src/config.ts`](src/config.ts)，分为六个分组：账号、站点、通知、定时任务、增量同步、AI 问答。
 
-| 参数                | 分组 | 说明                                     | 默认值                         |
-| ------------------- | ---- | ---------------------------------------- | ------------------------------ |
-| `ggUsername`        | 账号 | GG 原站用户名                            | `1`                            |
-| `ggPassword`        | 账号 | GG 原站密码                              | `1`                            |
-| `bwikiusername`     | 账号 | bwiki 用户名                             | `1`                            |
-| `bwikipassword`     | 账号 | bwiki 密码                               | `1`                            |
-| `domain`            | 站点 | 短链域名（用于生成按钮与提示里的链接）   | `klei.vip`                     |
-| `main_site`         | 站点 | 主站域名（GG 原站）                      | `oxygennotincluded.wiki.gg/zh` |
-| `bwiki_site`        | 站点 | 镜像站域名（bwiki）                      | `wiki.biligame.com/oni`        |
-| `logsUrl`           | 通知 | 日志查看地址，出现在命令回复里           | `https://klei.vip/onilogs`     |
-| `notifyGroupIds`    | 通知 | 增量更新成功后通知的群频道 ID 列表；留空则不通知 | `[]`                    |
-| `notifyBotPlatform` | 通知 | 发送通知所用的 bot 平台标识              | `qq`                           |
-| `updateCron`        | 定时 | 页面缓存自动更新的 cron 表达式           | `0 2 * * *`（每天 02:00）      |
+| 参数                  | 分组     | 说明                                                    | 默认值                         |
+| --------------------- | -------- | ------------------------------------------------------- | ------------------------------ |
+| `ggUsername`          | 账号     | GG 原站用户名                                           | `1`                            |
+| `ggPassword`          | 账号     | GG 原站密码                                             | `1`                            |
+| `bwikiusername`       | 账号     | bwiki 用户名                                            | `1`                            |
+| `bwikipassword`       | 账号     | bwiki 密码                                              | `1`                            |
+| `domain`              | 站点     | 短链域名（用于生成按钮与提示里的链接）                  | `klei.vip`                     |
+| `main_site`           | 站点     | 主站域名（GG 原站）                                     | `oxygennotincluded.wiki.gg/zh` |
+| `bwiki_site`          | 站点     | 镜像站域名（bwiki）                                     | `wiki.biligame.com/oni`        |
+| `logsUrl`             | 通知     | 日志查看地址，出现在命令回复里                          | `https://klei.vip/onilogs`     |
+| `notifyGroupIds`      | 通知     | 增量同步成功后通知的群频道 ID 列表；留空则不通知        | `[]`                           |
+| `notifyBotPlatform`   | 通知     | 发送通知所用的 bot 平台标识                             | `qq`                           |
+| `updateCron`          | 定时     | 页面缓存自动更新的 cron 表达式                          | `0 2 * * *`（每天 02:00）      |
+| `syncCron`            | 增量同步 | 增量同步 cron（控制台可动态改，改完写库覆盖此项）       | `15 * * * *`（每小时第 15 分） |
+| `syncLogLimit`        | 增量同步 | 最近更改记录的保留条数                                  | `5000`                         |
+| `syncCheckImages`     | 增量同步 | 是否在增量同步时比对图片                                | `true`                         |
+| `syncMaxPagesPerRun`  | 增量同步 | 单轮最多同步的页面数，超出部分由水位游标留到下一轮      | `300`                          |
+| `syncMaxImagesPerRun` | 增量同步 | 单轮最多同步的图片数                                    | `100`                          |
+| `syncOverlapSeconds`  | 增量同步 | 拉取起始时间向前偏移的秒数（抵消 MediaWiki 写入延迟）   | `10`                           |
+| `syncFallbackHours`   | 增量同步 | 首次运行（尚无水位）时向前回溯的小时数                  | `3`                            |
 
 ### 🤖 AI 相关配置
 
@@ -231,7 +249,23 @@ npm uninstall vectra @huggingface/transformers   # 0.12.0 起不再需要
 | `sync.allimgs`              | -          | 同步所有图片         | 2    |
 | `sync.contributor <title>`  | -          | 同步指定页面的贡献者 | 2    |
 | `sync.allcontributors`      | -          | 同步所有页面的贡献者 | 2    |
-| `sync.incrementalUpdate`    | `增量更新` | 执行一次增量更新     | 2    |
+| `sync.incrementalUpdate`    | `增量更新` | 手动触发一次增量同步（与面板「开始同步」同一条链路） | 2 |
+| `sync.status`               | -          | 查看同步任务状态、进度、下次定时 | 1 |
+
+#### 增量同步是怎么跑的
+
+1. **水位**：`sync_config.last_sync_time` 记录**上次完整跑完**的时间；首次运行没有水位时回溯 `syncFallbackHours`（默认 3 小时）。
+2. **拉页面变更**：`list=recentchanges`，区间 `[水位 - 10 秒, 现在]`，正序（旧→新），
+   只取 `rcnamespace=0` 且 `rctype=edit|new`（排除非主命名空间与删除日志）。
+   向前偏移 10 秒（`syncOverlapSeconds`）是为了抵消 MediaWiki 的写入延迟，宁可重复也不漏。
+3. **记录最近更改**：每条变更按 `rcid` 去重写入 `sync_logs`（同页多次编辑只同步一次页面，但记录都保留），
+   超过 `syncLogLimit` 时自动裁掉最旧的。
+4. **同步页面**：去重后的标题逐个走原有的 `PageSyncer.syncOne()`（内容相同会直接跳过），顺带补 `wikipages` 与贡献者。
+5. **同步图片**：图片不进 `recentchanges`，所以先用 `list=allimages&aiprop=timestamp` 拿一份轻量索引，
+   与 `sync_images` 指纹比对找出「新图片 / 时间戳变了」的，再用 `prop=imageinfo`（50 个一批）确认，逐个走 `ImageSyncer.syncOne()`。
+6. **推进水位**：跑完 → 水位 = 本轮结束时间；
+   若被 `syncMaxPagesPerRun` 截断 → 水位停在「最后处理页面的最早一次编辑」这个游标上，下一轮从那里继续。
+   中途**暂停/停止**不推进水位（下次重跑这段区间，靠 rcid 去重与内容比对几乎零成本）。
 
 ### 📝 缓存与登录
 
@@ -251,14 +285,13 @@ npm uninstall vectra @huggingface/transformers   # 0.12.0 起不再需要
 表达式支持 5 段（分 时 日 月 周）与 6 段（秒 分 时 日 月 周，兼容旧写法），
 本地时区，`ctx.setTimeout` 排期（插件卸载时自动清理）。
 
-| cron           | 时间            | 任务                    | 说明                                   |
-| -------------- | --------------- | ----------------------- | -------------------------------------- |
-| `15 * * * *`   | 每小时第 15 分  | 增量更新                | 同步最近 3 小时的编辑                  |
-| `0 2 * * *`    | 每天 02:00      | 页面缓存自动更新        | 由 `updateCron` 配置，默认值如左       |
-| `30 8 * * 3`   | 每周三 08:30    | 同步所有图片            | —                                      |
-| `30 8 * * 4`   | 每周四 08:30    | 同步所有页面            | —                                      |
-| `0 0 2 * * 0`  | 每周日 02:00    | 同步所有贡献者          | —                                      |
+| cron           | 时间            | 任务                    | 说明                                            |
+| -------------- | --------------- | ----------------------- | ----------------------------------------------- |
+| `15 * * * *`   | 每小时第 15 分  | **增量同步**            | 由 `syncCron` 配置，可在 `/onisync` 页面动态修改 |
+| `0 2 * * *`    | 每天 02:00      | 页面缓存自动更新        | 由 `updateCron` 配置，默认值如左                |
+| `0 0 2 * * 0`  | 每周日 02:00    | 同步所有贡献者          | —                                               |
 
+> 全量页面 / 全量图片同步**已不再定时执行**（2C2G 上代价太高），只保留手动命令。
 > 表达式写错时只记一条错误日志并跳过该任务，不会影响插件启动。
 > 需要查看已注册的任务与下次触发时间，可在控制台调试里执行 `ctx.oniCron.list()`。
 
@@ -279,8 +312,11 @@ npm uninstall vectra @huggingface/transformers   # 0.12.0 起不再需要
 | `wikipages` | `id`、`title`、`pinyin_full`、`pinyin_first`、`contributor`、`change_time`                                       |
 | `oniaimemory` | `id`（主键=记忆键）、`payload`（JSON）、`updated_at`（毫秒时间戳）                                       |
 | `onilogs`   | `id`（自增）、`time`、`level`、`name`、`scope`、`message`（最多保留 3000 条）                                     |
+| `sync_logs` | `id`（主键 = rcid）、`title`、`user`、`timestamp`（ISO）、`comment`、`sizeDiff`、`diffHtml`、`revid`、`parentid`、`ns` |
+| `sync_config` | `key`（主键）、`value` —— 存 `last_sync_time` / `cron_schedule` / `last_result`                                 |
+| `sync_images` | `title`（主键）、`timestamp`、`sha1`、`synced_at` —— 图片增量比对用的指纹                                     |
 
-`wikipages` / `oniaimemory` / `onilogs` 通过 `Tables` 接口增强声明（见 `databaseExtension.ts`）。
+`wikipages` / `oniaimemory` / `onilogs` / `sync_*` 通过 `Tables` 接口增强声明（见 `databaseExtension.ts`）。
 
 > 0.12.0 起不再维护 `wikitexts` 表（渲染文本改为按需抓取），0.12.5 起连表声明也移除了。
 > 0.14.0 起不再有 `onitodos` 表（TodoList 功能已移除）。
@@ -288,12 +324,28 @@ npm uninstall vectra @huggingface/transformers   # 0.12.0 起不再需要
 
 ## 🎨 控制台界面
 
-插件在 Koishi 控制台注册两个页面（见 [`client/index.ts`](client/index.ts)）：
+插件在 Koishi 控制台注册三个页面（见 [`client/index.ts`](client/index.ts)）：
 
 | 页面           | 源码位置                  | 功能                                        |
 | -------------- | ------------------------- | ------------------------------------------- |
 | 同步机器人首页 | `client/onilogs/`         | 日志中心：按模块 / 级别 / 时间筛选与检索（最多保留 3000 条） |
+| 同步运维       | `client/onisync/`         | 任务控制面板 + 最近更改列表（diff 抽屉）     |
 | 火箭计算器     | `client/Rocketcalculator/`| ONI 火箭设计计算器                          |
+
+### 同步运维面板
+
+页面对应后端 `src/plugins/syncConsole.ts`，控制台事件与方法名的对应关系：
+
+| 需求里的名字     | 实际事件            | 说明                                        |
+| ---------------- | ------------------- | ------------------------------------------- |
+| `get-task-status`| `sync/status`       | 任务状态 + 进度 + 下次触发 + 水位           |
+| `get-sync-logs`  | `sync/logs`         | 分页 / 关键词查询最近更改                   |
+| —                | `sync/detail`       | 单条详情，`diffHtml` 为空时实时抓取并缓存   |
+| `control-task`   | `sync/control`      | `start` / `pause` / `resume` / `stop`（权限 2） |
+| `update-cron`    | `sync/cron`         | 校验并重排定时任务，写库持久化（权限 2）    |
+| —                | `sync/clearLogs`    | 清空最近更改（权限 2）                      |
+
+状态推走 DataService `onisync`（轻量快照，进度 400ms 节流），列表则按需 `send` 拉取。
 
 ### 日志中心
 
@@ -318,17 +370,21 @@ src/
 │   ├── aiMemory.ts           # 追问记忆（用户 / 群话题）与上下文选择
 │   ├── messageRenderer.ts    # QQ markdown+按钮 / 纯文本 的渲染
 │   ├── logStore.ts           # 日志仓库：内存 3000 条 + 节流落库 + 模块归类
+│   ├── syncRepository.ts     # 水位 / 最近更改 / 图片指纹的持久化
+│   ├── syncTaskManager.ts    # 任务状态机 + 协作式取消令牌（pausable / stoppable）
 │   └── consoleLogProvider.ts # 控制台日志服务（onilogs）
 ├── plugins/
 │   ├── cronService.ts        # 挂载 ctx.oniCron
-│   ├── databaseExtension.ts  # wikipages / oniaimemory / onilogs 表定义
+│   ├── databaseExtension.ts  # wikipages / oniaimemory / onilogs / sync_* 表定义
+│   ├── syncConsole.ts        # 同步运维面板：任务控制 / 最近更改 / 动态 cron（ctx.syncConsole）
 │   ├── queryCommands.ts      # x / 查wiki
 │   ├── aiQueryCommands.ts    # ai / ai.status（Agent 调度）
-│   ├── syncCommands.ts       # sync.* 命令 + 同步相关定时任务
+│   ├── syncCommands.ts       # sync.* 命令 + 贡献者定时任务
 │   ├── updateCommands.ts     # update.* / redirect / relogin
 │   └── routeRedirect.ts      # 短链路由
 ├── sync/
-│   ├── pageSync.ts           # PageSyncer：单页 / 全量 / 增量更新
+│   ├── pageSync.ts           # PageSyncer：单页 / 全量（原子能力，不含调度）
+│   ├── incrementalSync.ts    # 增量引擎：recentchanges + 图片指纹 + 水位推进
 │   ├── moduleSync.ts         # ModuleSyncer：模块同步
 │   └── imgSync.ts            # ImageSyncer：图片同步
 └── utils/
@@ -356,6 +412,8 @@ DatabaseExtension（声明数据表）
 WikiBotService（提供 wikiBot 服务：登录 + 取正文）
   ↓
 ConsoleLogProvider（提供 console 数据源）
+  ↓
+SyncConsole（提供 syncConsole：增量任务 + 最近更改 + 动态 cron）
   ↓
 RouteRedirect / SyncCommands / QueryCommands / UpdateCommands / AiQueryCommands
 ```

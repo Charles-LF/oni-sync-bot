@@ -2,10 +2,9 @@ import { Context } from "koishi";
 import type { NotifyConfig } from "../config";
 import { sleep } from "../utils/async";
 import { Mwn } from "mwn";
-import { PageSyncer, SyncNotifyItem } from "../sync/pageSync";
+import { PageSyncer } from "../sync/pageSync";
 import { ModuleSyncer } from "../sync/moduleSync";
 import { ImageSyncer } from "../sync/imgSync";
-import { SyncNotifier } from "../services/syncNotifier";
 import { logger, formatWikiTime } from "../utils/tools";
 
 /**
@@ -20,90 +19,38 @@ export class SyncCommands {
     wikiBot: { required: true },
     database: { required: true },
     oniCron: { required: true },
+    syncConsole: { required: true },
     http: { required: false },
   };
   public config: SyncCommandsConfig;
-  private notifyFn?: (items: SyncNotifyItem[]) => void;
 
   constructor(ctx: Context, config: SyncCommandsConfig) {
     this.config = config;
     logger.info("WikiBot 服务已就绪，初始化定时任务和指令");
 
-    const notifier = new SyncNotifier(
-      ctx,
-      config.notifyGroupIds,
-      config.notifyBotPlatform,
-    );
-    this.notifyFn = notifier.enabled
-      ? (items) => void notifier.notify(items)
-      : undefined;
-
     this.registerScheduledTasks(ctx);
     this.registerCommands(ctx);
   }
 
-  /** 统一的 PageSyncer 构造：数据库与通知都在这里装配 */
+  /** 统一的 PageSyncer 构造：数据库在这里装配 */
   private createPageSyncer(ctx: Context): PageSyncer {
     return new PageSyncer(ctx.wikiBot.getGGBot(), ctx.wikiBot.getBWikiBot(), {
       database: ctx.database,
-      notify: this.notifyFn,
     });
   }
 
-  /** 同步相关的定时任务；cron 表达式即调度策略，集中在一处便于对照 */
+  /**
+   * 同步相关的定时任务。
+   *
+   * 增量同步（页面 + 图片）的 cron 由 `SyncConsole` 持有——它需要支持控制台动态改表达式，
+   * 放在这里会和「运行时改 cron」互相打架。这里只保留贡献者这种低频、与增量无关的任务。
+   */
   private registerScheduledTasks(ctx: Context) {
     const cron = ctx.oniCron;
     if (typeof cron !== "function") {
       logger.warn("内置 cron 调度器未就绪，定时同步任务已跳过；手动命令不受影响");
       return;
     }
-
-    cron(
-      "15 * * * *",
-      async () => {
-        if (!(await this.ensureBotsReady(ctx, "增量更新"))) return;
-
-        await this.createPageSyncer(ctx).incrementalUpdate();
-      },
-      "每小时增量同步",
-    );
-
-    cron(
-      "30 8 * * 4",
-      async () => {
-        if (!(await this.ensureBotsReady(ctx, "同步所有页面"))) return;
-
-        await this.createPageSyncer(ctx)
-          .syncAll()
-          .then(() => {
-            logger.info("自动任务：尝试同步所有页面，从 WIKIGG 到 bwiki");
-          })
-          .catch((err) => {
-            logger.error(`同步所有页面失败，错误信息：${err}`);
-          });
-      },
-      "每周四全量页面同步",
-    );
-
-    cron(
-      "30 8 * * 3",
-      async () => {
-        if (!(await this.ensureBotsReady(ctx, "同步所有图片"))) return;
-
-        await new ImageSyncer(
-          ctx.wikiBot.getGGBot(),
-          ctx.wikiBot.getBWikiBot(),
-        )
-          .syncAll()
-          .then(() => {
-            logger.info("自动任务：尝试同步所有图片，从 WIKIGG 到 bwiki");
-          })
-          .catch((err) => {
-            logger.error(`同步所有图片失败，错误信息：${err}`);
-          });
-      },
-      "每周三全量图片同步",
-    );
 
     cron(
       "0 0 2 * * 0",
@@ -113,7 +60,7 @@ export class SyncCommands {
       },
       "每周日贡献者同步",
     );
-    logger.info("✅ 定时同步任务已注册（每小时增量 / 每周三图片 / 每周四页面 / 每周日贡献者）");
+    logger.info("✅ 贡献者定时任务已注册（每周日 02:00）；增量同步由「同步运维」面板调度");
   }
 
   private async ensureBotsReady(
@@ -149,21 +96,39 @@ export class SyncCommands {
       });
 
     ctx
-      .command("sync.incrementalUpdate", "获取3h内的编辑并尝试更新", {
+      .command("sync.incrementalUpdate", "按水位同步最近的编辑与图片", {
         authority: 2,
       })
       .alias("增量更新")
       .action(async ({ session }) => {
-        if (!(await this.ensureBotsReady(ctx, "增量更新"))) {
-          return "❌ Wiki 机器人未就绪，请检查登录配置或查看日志";
-        }
-        try {
-          await this.createPageSyncer(ctx).incrementalUpdate();
-          return `✅ 已尝试获取三小时前的编辑并同步，请前往控制台查看：${this.config.logsUrl}`;
-        } catch (err) {
-          logger.error(`增量更新失败，错误信息：${err}`);
-          return `❌ 增量更新失败，请前往控制台查看日志：${this.config.logsUrl}`;
-        }
+        const result = await ctx.syncConsole.startTask("command");
+        return result.ok
+          ? `✅ ${result.message}，完成后可前往控制台查看：${this.config.logsUrl}`
+          : `⚠️ ${result.message}`;
+      });
+
+    ctx
+      .command("sync.status", "查看同步任务状态", { authority: 1 })
+      .action(async ({ session }) => {
+        const status = ctx.syncConsole.status();
+        const stateText: Record<string, string> = {
+          idle: "空闲",
+          running: "运行中",
+          paused: "已暂停",
+          stopped: "已停止",
+        };
+        const nextRun = status.nextRunAt
+          ? new Date(status.nextRunAt).toLocaleString()
+          : "未排期";
+        const lines = [
+          `📊 同步任务：${stateText[status.state] ?? status.state}`,
+          `进度：${status.progress.phase} ${status.progress.current}/${status.progress.total || "?"}`,
+          status.progress.message ? `说明：${status.progress.message}` : "",
+          `下次定时：${nextRun}（${status.cron}）`,
+          status.lastSyncTime ? `上次水位：${status.lastSyncTime}` : "",
+          status.lastResult ? `上次结果：${status.lastResult}` : "",
+        ].filter(Boolean);
+        return lines.join("\n");
       });
 
     ctx

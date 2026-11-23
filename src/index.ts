@@ -6,6 +6,7 @@ import { WikiBotService } from "./services/wikiBotService";
 import { ConsoleLogProvider } from "./services/consoleLogProvider";
 import { DatabaseExtension } from "./plugins/databaseExtension";
 import { RouteRedirect } from "./plugins/routeRedirect";
+import { SyncConsole } from "./plugins/syncConsole";
 import { SyncCommands } from "./plugins/syncCommands";
 import { QueryCommands } from "./plugins/queryCommands";
 import { UpdateCommands } from "./plugins/updateCommands";
@@ -21,6 +22,7 @@ const SUB_PLUGINS = [
   DatabaseExtension,
   WikiBotService,
   ConsoleLogProvider,
+  SyncConsole,
   RouteRedirect,
   SyncCommands,
   QueryCommands,

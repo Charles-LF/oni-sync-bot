@@ -7,7 +7,6 @@ import {
   getErrorMessage,
 } from "../utils/tools";
 import { sleep, withRetry } from "../utils/async";
-import { ImageSyncer } from "./imgSync";
 
 /**
  * pageSync 需要的数据库能力（结构化的最小接口）。
@@ -57,15 +56,6 @@ const DEFAULT_OPTIONS: PageSyncOptions = {
   dbRetryDelay: 500,
 };
 
-interface RecentChange {
-  title: string;
-  user?: string;
-  timestamp?: string;
-  comment?: string;
-  rcid: number;
-  pageid?: number;
-}
-
 export interface PageSyncResult {
   success: boolean;
   reason: string;
@@ -80,22 +70,18 @@ interface SyncStats {
 export interface PageSyncerDependencies {
   /** 数据库实例（可选），用于维护 wikipages 表 */
   database?: Database;
-  /** 增量更新结束时一次性回调（仅包含 reason==="synced" 的条目） */
-  notify?: (items: SyncNotifyItem[]) => void;
   options?: Partial<PageSyncOptions>;
 }
 
 /**
- * 负责页面层面的同步：单页同步、全量同步、以及定时的增量更新。
+ * 负责页面层面的同步：单页同步与全量同步。
  *
- * 依赖（源站 / 目标站 / 数据库 / 通知回调 / 选项）全部由构造函数注入，
- * 不再依赖模块级可变单例；图片同步通过组合 `ImageSyncer` 复用。
+ * 依赖（源站 / 目标站 / 数据库 / 选项）全部由构造函数注入，不再依赖模块级可变单例。
+ * 增量调度由 `sync/incrementalSync.ts` 负责，本类只提供「同步一页」这种原子能力。
  */
 export class PageSyncer {
   private readonly options: PageSyncOptions;
   private readonly database?: Database;
-  private readonly notify?: (items: SyncNotifyItem[]) => void;
-  private readonly images: ImageSyncer;
 
   constructor(
     private readonly source: Mwn,
@@ -104,8 +90,6 @@ export class PageSyncer {
   ) {
     this.options = { ...DEFAULT_OPTIONS, ...deps.options };
     this.database = deps.database;
-    this.notify = deps.notify;
-    this.images = new ImageSyncer(source, target);
   }
 
   // ---------------------------------------------------------------- 数据库
@@ -122,12 +106,11 @@ export class PageSyncer {
   }
 
   /** 若数据库中不存在该页面，先写入基本数据（含拼音索引） */
-  private async ensurePageInDatabase(
-    pageId: number,
-    title: string,
-  ): Promise<void> {
+  async ensurePage(pageId: number, title: string): Promise<void> {
     const database = this.database;
     if (!database) return;
+    // 没有 pageid 的（极少数脏数据）不写入，避免主键 0 冲突
+    if (!pageId || pageId <= 0) return;
 
     try {
       await this.retryDb(async () => {
@@ -151,7 +134,7 @@ export class PageSyncer {
   }
 
   /** 更新页面贡献者信息到数据库 */
-  private async updateContributorToDatabase(
+  async updateContributor(
     title: string,
     user: string,
     timestamp: string,
@@ -374,170 +357,6 @@ export class PageSyncer {
     } catch (globalError) {
       logger.error(`[SyncAllPages] 💥 批量同步流程异常终止:`, globalError);
       throw globalError;
-    }
-  }
-
-  // ---------------------------------------------------------------- 增量更新
-
-  /**
-   * 增量更新：取最近 3 小时的 recentchanges 并逐条同步。
-   *
-   * 结束时通过构造时注入的 `notify` 一次性回调成功条目
-   * （仅 reason==="synced" 的页面与图片）。
-   */
-  async incrementalUpdate(): Promise<void> {
-    const startTime = Date.now();
-    const processedTitles = new Set<string>();
-    const syncedItems: SyncNotifyItem[] = [];
-    let totalProcessed = 0;
-    let totalSkipped = 0;
-    let totalSynced = 0;
-
-    try {
-      const now = new Date();
-      const threeHoursAgo = new Date(now.getTime() - 3 * 60 * 60 * 1000);
-      logger.info(
-        `[增量更新流程] ⏰ 开始处理 ${threeHoursAgo.toISOString()} 到 ${now.toISOString()} 的更新...`,
-      );
-
-      const queryGen = this.source.continuedQueryGen({
-        action: "query",
-        list: "recentchanges",
-        rcstart: now.toISOString(),
-        rcend: threeHoursAgo.toISOString(),
-        rcdir: "older",
-        rcprop: "user|comment|title|timestamp|ids",
-      });
-
-      for await (const res of queryGen) {
-        const pages: RecentChange[] = res.query?.recentchanges || [];
-
-        for (const page of pages) {
-          const {
-            title,
-            user: rcUser,
-            timestamp: rcTimestamp,
-            comment: rcComment,
-            pageid,
-          } = page;
-
-          // 检查是否已处理过
-          if (processedTitles.has(title)) {
-            logger.debug(`[增量更新流程] ⏭️ 已处理过 ${title}, 跳过`);
-            totalSkipped++;
-            continue;
-          }
-
-          // 检查是否在忽略列表中
-          if (this.options.ignoredPages.has(title)) {
-            logger.info(
-              `[增量更新流程] 🚫 ${title} 在无需处理的页面列表中, 跳过`,
-            );
-            processedTitles.add(title);
-            totalSkipped++;
-            continue;
-          }
-
-          processedTitles.add(title);
-          totalProcessed++;
-
-          try {
-            const user = rcUser || "未知";
-            const timestamp = rcTimestamp || "";
-            const comment = rcComment || "";
-
-            // 检查是否为图片页面
-            if (title.startsWith(this.options.fileNamespacePrefix)) {
-              await this.handleImageSync(
-                title,
-                user,
-                timestamp,
-                comment,
-                syncedItems,
-              );
-            } else {
-              await this.handlePageSync(
-                title,
-                pageid || 0,
-                user,
-                timestamp,
-                comment,
-                syncedItems,
-              );
-              totalSynced++;
-            }
-
-            await sleep(this.options.intervalSuccess);
-          } catch (error) {
-            const errMsg = getErrorMessage(error);
-            logger.error(`[增量更新流程] ❌ 处理 ${title} 时出错:`, errMsg);
-            await sleep(this.options.intervalFailed);
-          }
-        }
-      }
-    } catch (globalError) {
-      logger.error(`[增量更新流程] 💥 增量更新流程异常终止:`, globalError);
-      throw globalError;
-    } finally {
-      const duration = (Date.now() - startTime) / 1000;
-      logger.info(
-        `[增量更新流程] ✅ 增量更新完成！处理: ${totalProcessed}, 跳过: ${totalSkipped}, 同步: ${totalSynced}, 通知: ${syncedItems.length}, 耗时: ${duration.toFixed(2)}s`,
-      );
-      if (syncedItems.length > 0) {
-        this.notify?.(syncedItems);
-      }
-    }
-  }
-
-  /** 增量更新中遇到图片页面时的处理 */
-  private async handleImageSync(
-    title: string,
-    user: string,
-    timestamp: string,
-    comment: string,
-    syncedItems: SyncNotifyItem[],
-  ): Promise<void> {
-    const fileName = title.replace(this.options.fileNamespacePrefix, "");
-    logger.info(`[增量更新流程] 🖼️ 检查到图片: ${title}，正在尝试转存`);
-
-    const result = await this.images.syncOne(fileName);
-    if (result.success && result.reason === "synced") {
-      syncedItems.push({
-        title,
-        type: "image",
-        user,
-        timestamp,
-        comment,
-      });
-    }
-  }
-
-  /** 增量更新中遇到普通页面时的处理 */
-  private async handlePageSync(
-    title: string,
-    pageId: number,
-    user: string,
-    timestamp: string,
-    comment: string,
-    syncedItems: SyncNotifyItem[],
-  ): Promise<void> {
-    // 先检查数据库中是否存在该页面，不存在则先创建
-    await this.ensurePageInDatabase(pageId, title);
-
-    const result = await this.syncOne(title, user);
-    if (result.success) {
-      if (result.reason === "synced") {
-        syncedItems.push({
-          title,
-          type: "page",
-          user,
-          timestamp,
-          comment,
-        });
-      }
-
-      // 更新贡献者信息（无论内容是否变化，只要有变更记录就更新）
-      await this.updateContributorToDatabase(title, user, timestamp);
     }
   }
 }

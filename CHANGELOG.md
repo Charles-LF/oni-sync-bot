@@ -19,6 +19,53 @@
 
 ---
 
+## [0.15.0] — 2026-11-23
+
+> 同步从「每周全量」改为**基于变更检测的增量同步**，并新增控制台「同步运维」面板。
+> 全量页面 / 全量图片同步不再定时执行，只保留手动命令。
+
+### Added
+
+- **持久化同步水位**：`sync_config` 表记录 `last_sync_time`，只处理上次成功之后的新编辑；
+  首次运行按 `syncFallbackHours`（默认 3 小时）回溯
+- **增量引擎**（`src/sync/incrementalSync.ts`）：
+  - 页面：`list=recentchanges`，区间 `[水位 - 10 秒, 现在]`，正序拉取，
+    只取主命名空间 + `rctype=edit|new`（排除非主命名空间与删除日志），按标题去重
+  - 图片：`list=allimages&aiprop=timestamp` 轻量索引 + `prop=imageinfo` 批量确认，
+    与 `sync_images` 指纹比对，能发现**新图片**（不只已知图片的变更）
+  - 变更按 `rcid` 写进 `sync_logs` 并自动裁剪；被 `syncMaxPagesPerRun` 截断时水位停在游标处，
+    下一轮接着跑，不会漏页面
+- **任务状态机**（`src/services/syncTaskManager.ts`）：`idle / running / paused / stopped`，
+  同一时刻只允许一个任务；`RunToken` 是**协作式**取消，只在两个分片之间检查，
+  不会打断进行中的 mwn 请求，也不会让任务卡死
+- **控制台「同步运维」页**（`/onisync`，代码 `client/onisync/`）：
+  - 顶部控制面板：状态灯、开始 / 暂停 / 继续 / 停止、进度条、同步 / 跳过 / 失败计数、
+    下次自动同步时间、同步水位、图片索引数量、更改记录条数
+  - cron 表达式输入框，保存后立即重排下一次触发并写库（重启仍生效）
+  - 底部最近更改列表：`[时间] 标题 | @用户 (+12) | 摘要`，支持关键词检索、分页加载、
+    点击打开抽屉查看 diff（首次点击实时向原站请求并缓存到 `diffHtml`）
+  - 全部用 Element Plus 主题变量，跟随 Koishi 明暗主题，移动端自适应
+- **新表**：`sync_logs`（最近更改，含 `revid` / `parentid` 以便按需取 diff）、
+  `sync_config`（key/value 配置）、`sync_images`（图片指纹）
+- **控制台事件**：`sync/status`、`sync/logs`、`sync/detail`、`sync/control`、`sync/cron`、`sync/clearLogs`
+- **新命令**：`sync.status` 查看任务状态；`sync.incrementalUpdate` 改走新的增量链路
+- **配置**：新增 `DeltaSyncConfig`（`syncCron` / `syncLogLimit` / `syncCheckImages` /
+  `syncMaxPagesPerRun` / `syncMaxImagesPerRun` / `syncOverlapSeconds` / `syncFallbackHours`）
+- 日志归类新增「同步任务」模块
+
+### Changed
+
+- 定时任务：去掉「每周三全量图片」「每周四全量页面」，改为每小时一次增量同步（cron 存库、可在面板改）
+- `PageSyncer` 去掉内置的 `incrementalUpdate()`（调度交给增量引擎），
+  保留 `syncOne()` 并新增公开的 `ensurePage()` / `updateContributor()` 供引擎复用
+- `syncMaxPagesPerRun` 等上下限放宽到 `min(1)`，便于低配机器或调试时一轮只跑一两个页面
+
+### Removed
+
+- `PageSyncer` 不再依赖 `notify` 回调与 `ImageSyncer`（由增量引擎统一编排）
+
+---
+
 ## [0.14.0] — 2026-11-23
 
 > **破坏性变更**：TodoList（待办）功能整体移除，前后端与相关命令、定时任务、数据表定义全部删除。

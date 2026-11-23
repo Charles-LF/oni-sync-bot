@@ -63,6 +63,7 @@ const NOTIFY_DELAY = 300;
  */
 const SCOPE_RULES: Array<{ test: RegExp; scope: string }> = [
   { test: /日志读取失败|日志写入失败|记录日志失败|清空历史日志失败/, scope: "日志系统" },
+  { test: /\[同步任务\]/, scope: "同步任务" },
   { test: /\[增量更新流程\]/, scope: "增量更新" },
   { test: /\[SyncAllPages\]|所有页面同步/, scope: "全量页面同步" },
   { test: /\[SyncAllModules\]|\[moduleSync\]|同步所有模块/, scope: "模块同步" },

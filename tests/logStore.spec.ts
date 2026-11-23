@@ -31,6 +31,7 @@ function push(store: LogStore, type: string, name: string, content: string) {
 describe("services/logStore 日志归类", () => {
   it("按日志前缀拆出业务模块", () => {
     const cases: Array<[string, string]> = [
+      ["[同步任务] 已启动（触发方式：cron）", "同步任务"],
       ["[增量更新流程] ⏰ 开始处理", "增量更新"],
       ["[SyncAllPages] 📄 已获取 500 个页面", "全量页面同步"],
       ["[syncSinglePage] ✅ 页面 电解器 同步成功", "页面同步"],
