@@ -4,6 +4,7 @@ import {
   RunToken,
   SyncAbortedError,
   SyncTaskManager,
+  type SyncRunner,
 } from "../src/services/syncTaskManager";
 import { runIncrementalSync } from "../src/sync/incrementalSync";
 
@@ -115,6 +116,27 @@ describe("services/syncTaskManager 取消令牌", () => {
 });
 
 describe("services/syncTaskManager 状态机", () => {
+  const META = [
+    {
+      id: "delta" as const,
+      label: "增量同步",
+      description: "自动运行",
+      controllable: false,
+    },
+    {
+      id: "pages" as const,
+      label: "全量同步页面",
+      description: "手动",
+      controllable: true,
+    },
+    {
+      id: "images" as const,
+      label: "全量同步图片",
+      description: "手动",
+      controllable: true,
+    },
+  ];
+
   function createManager() {
     const ctx = {
       setTimeout: (cb: () => void, ms: number) => {
@@ -122,18 +144,31 @@ describe("services/syncTaskManager 状态机", () => {
         return () => clearTimeout(timer);
       },
     } as any;
-    const snapshots: string[] = [];
-    const manager = new SyncTaskManager(ctx, (snapshot) => {
-      snapshots.push(snapshot.state);
-    });
-    return { manager, snapshots };
+    const manager = new SyncTaskManager(ctx, META, () => {});
+    return { manager };
+  }
+
+  function taskOf(manager: SyncTaskManager, id: "delta" | "pages" | "images") {
+    return manager.snapshot().tasks.find((task) => task.id === id)!;
+  }
+
+  /** 一直跑到被暂停/停止的 runner（暂停时会停在 checkpoint 上） */
+  function longRunner(): SyncRunner {
+    return async (token, report) => {
+      for (let i = 0; i < 200; i++) {
+        await token.checkpoint();
+        report({ phase: "跑", current: i + 1, total: 200 });
+        await sleep(2);
+      }
+      return { synced: 0, skipped: 0, failed: 0, message: "完成" };
+    };
   }
 
   it("start → pause → resume → stop 的完整流转", async () => {
     const { manager } = createManager();
     let finished = false;
 
-    const started = await manager.start("test", async (token, report) => {
+    const started = await manager.start("pages", "test", async (token, report) => {
       for (let i = 0; i < 200; i++) {
         await token.checkpoint();
         report({ phase: "跑", current: i + 1, total: 200 });
@@ -144,38 +179,91 @@ describe("services/syncTaskManager 状态机", () => {
     });
 
     assert.equal(started.ok, true);
-    assert.equal(manager.snapshot().state, "running");
+    assert.equal(taskOf(manager, "pages").state, "running");
+    assert.equal(manager.activeId, "pages");
 
-    manager.pause();
-    assert.equal(manager.snapshot().state, "paused");
+    manager.pause("pages");
+    assert.equal(taskOf(manager, "pages").state, "paused");
 
-    manager.resume();
-    assert.equal(manager.snapshot().state, "running");
+    manager.resume("pages");
+    assert.equal(taskOf(manager, "pages").state, "running");
 
-    manager.stop();
-    assert.equal(manager.snapshot().state, "stopped", "停止请求应立即反映到快照");
+    manager.stop("pages");
+    assert.equal(
+      taskOf(manager, "pages").state,
+      "stopped",
+      "停止请求应立即反映到快照",
+    );
 
     await sleep(60);
     assert.equal(manager.busy, false, "任务应已退出");
     assert.equal(finished, false, "循环不应跑完");
-    assert.equal(manager.snapshot().state, "stopped");
+    assert.equal(taskOf(manager, "pages").state, "stopped");
   });
 
-  it("同一时刻只允许一个任务", async () => {
+  it("启动另一个任务时，正在跑的任务自动暂停（互相让路）", async () => {
     const { manager } = createManager();
-    await manager.start("test", async (token) => {
-      await sleep(40);
-      return { synced: 0, skipped: 0, failed: 0, message: "完成" };
-    });
-    const second = await manager.start("test", async () => ({
-      synced: 0,
-      skipped: 0,
-      failed: 0,
-      message: "完成",
-    }));
-    assert.equal(second.ok, false);
-    manager.stop();
-    await sleep(50);
+    await manager.start("pages", "test", longRunner());
+
+    const second = await manager.start("images", "console", longRunner(), true);
+    assert.equal(second.ok, true);
+    assert.match(second.message, /已暂停「全量同步页面」/);
+    assert.equal(taskOf(manager, "pages").state, "paused");
+    assert.equal(taskOf(manager, "images").state, "running");
+    assert.match(taskOf(manager, "pages").progress.message, /自动暂停/);
+
+    manager.stop("images");
+    await sleep(60);
+    assert.equal(taskOf(manager, "images").state, "stopped");
+    // pages 仍停在被自动暂停的状态，需要显式停止才算退出
+    assert.equal(taskOf(manager, "pages").state, "paused");
+    manager.stop("pages");
+    await sleep(60);
+    assert.equal(manager.busy, false);
+  });
+
+  it("增量同步优先级最高：全量任务让路，增量在跑时全量不能抢占", async () => {
+    const { manager } = createManager();
+    await manager.start("pages", "console", longRunner(), true);
+
+    // 定时触发（非手动）的增量同步要能抢占
+    const delta = await manager.start("delta", "cron", longRunner());
+    assert.equal(delta.ok, true);
+    assert.equal(taskOf(manager, "pages").state, "paused");
+    assert.equal(taskOf(manager, "images").state, "idle");
+    assert.match(taskOf(manager, "pages").progress.message, /增量同步/);
+
+    // 增量在跑时，全量任务不能抢占（增量不可暂停）
+    const blocked = await manager.start("images", "console", longRunner(), true);
+    assert.equal(blocked.ok, false);
+    assert.match(blocked.message, /优先级最高/);
+
+    manager.stop("delta");
+    await sleep(60);
+  });
+
+  it("对已暂停的任务点「开始」等价于继续", async () => {
+    const { manager } = createManager();
+    await manager.start("pages", "test", longRunner());
+    manager.pause("pages");
+
+    const again = await manager.start("pages", "console", longRunner(), true);
+    assert.equal(again.ok, true);
+    assert.equal(taskOf(manager, "pages").state, "running");
+
+    manager.stop("pages");
+    await sleep(60);
+  });
+
+  it("不可控任务不能手动启动/暂停/停止", async () => {
+    const { manager } = createManager();
+    const started = await manager.start("delta", "console", longRunner(), true);
+    assert.equal(started.ok, false, "增量同步不允许手动启动");
+    assert.match(started.message, /自动调度/);
+
+    assert.equal(manager.pause("delta").ok, false);
+    assert.equal(manager.stop("delta").ok, false);
+    assert.match(manager.stop("delta").message, /自动调度/);
   });
 });
 

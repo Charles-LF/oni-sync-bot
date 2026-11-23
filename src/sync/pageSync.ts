@@ -7,6 +7,12 @@ import {
   getErrorMessage,
 } from "../utils/tools";
 import { sleep, withRetry } from "../utils/async";
+import type {
+  SyncLoopHooks,
+  SyncLoopProgress,
+  SyncLoopResult,
+} from "./hooks";
+import { ABORT_ERROR_NAME } from "./hooks";
 
 /**
  * pageSync 需要的数据库能力（结构化的最小接口）。
@@ -115,8 +121,10 @@ export class PageSyncer {
     try {
       await this.retryDb(async () => {
         const existing = await database.get("wikipages", { title });
-        if (existing.length === 0) {
-          const { pinyin_full, pinyin_first } = generatePinyinInfo(title);
+        if (existing.length > 0) return;
+
+        const { pinyin_full, pinyin_first } = generatePinyinInfo(title);
+        try {
           await database.create("wikipages", {
             id: pageId,
             title,
@@ -124,6 +132,14 @@ export class PageSyncer {
             pinyin_first,
           });
           logger.info(`[数据库初始化] ✅ 页面 ${title} 已添加到数据库`);
+        } catch (err) {
+          // 页面改名后 pageid 不变：按主键覆盖标题，而不是让 UNIQUE 约束报错
+          await database.set(
+            "wikipages",
+            { id: pageId },
+            { title, pinyin_full, pinyin_first },
+          );
+          logger.info(`[数据库初始化] ♻️ 页面 ${title} 已按 pageid 更新标题`);
         }
       });
     } catch (err) {
@@ -283,14 +299,26 @@ export class PageSyncer {
   }
 
   /** 全量同步所有页面：先串行同步一轮，再重试失败的 */
-  async syncAll(): Promise<void> {
+  async syncAll(hooks: SyncLoopHooks = {}): Promise<SyncLoopResult> {
+    const emit = (info: Partial<SyncLoopProgress>) =>
+      hooks.onProgress?.({
+        phase: "同步页面",
+        current: 0,
+        total: 0,
+        synced: 0,
+        skipped: 0,
+        failed: 0,
+        ...info,
+      });
+
     try {
+      emit({ phase: "列举页面" });
       const oldPageList = await this.listAll();
       const total = oldPageList.length;
 
       if (total === 0) {
         logger.info(`[SyncAllPages] 📭 原站点无页面可同步，结束`);
-        return;
+        return { total: 0, synced: 0, skipped: 0, failed: 0 };
       }
 
       const stats: SyncStats = {
@@ -304,6 +332,7 @@ export class PageSyncer {
 
       // 第一轮同步
       for (let index = 0; index < total; index++) {
+        await hooks.checkpoint?.();
         const pageTitle = oldPageList[index];
         this.printProgress(index + 1, total, pageTitle);
         await this.processPageWithStats(
@@ -312,6 +341,14 @@ export class PageSyncer {
           stats,
           failedPages,
         );
+        emit({
+          current: index + 1,
+          total,
+          title: pageTitle,
+          synced: stats.successCount - stats.skipCount,
+          skipped: stats.skipCount,
+          failed: stats.failCount,
+        });
       }
 
       // 第二轮重试
@@ -322,6 +359,7 @@ export class PageSyncer {
         );
 
         for (const pageTitle of failedPages) {
+          await hooks.checkpoint?.();
           logger.info(`\n[SyncAllPages] 🔁 重试中: ${pageTitle}`);
           const syncResult = await this.syncOne(
             pageTitle,
@@ -354,7 +392,17 @@ export class PageSyncer {
         stats.skipCount,
         stillFailed,
       );
+      return {
+        total,
+        synced: stats.successCount - stats.skipCount,
+        skipped: stats.skipCount,
+        failed: stillFailed.length,
+      };
     } catch (globalError) {
+      // 主动停止（SyncAbortedError）不算异常，交给上层判定
+      if (globalError instanceof Error && globalError.name === ABORT_ERROR_NAME) {
+        throw globalError;
+      }
       logger.error(`[SyncAllPages] 💥 批量同步流程异常终止:`, globalError);
       throw globalError;
     }

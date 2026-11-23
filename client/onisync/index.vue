@@ -7,12 +7,11 @@
 </template>
 
 <style lang="scss" scoped>
-/* 背景与文字色跟随控制台主题（--el-* 由 Element Plus / Koishi 主题注入） */
+/* 背景交给 k-layout（它会随主题变）；页面里只画卡片 */
 .oni-sync-page {
   height: 100%;
   padding: 16px;
   color: var(--el-text-color-primary);
-  background: var(--el-bg-color-page);
 }
 
 @media (max-width: 768px) {

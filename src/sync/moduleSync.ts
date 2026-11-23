@@ -5,6 +5,8 @@ import {
   getErrorMessage,
 } from "../utils/tools";
 import { sleep } from "../utils/async";
+import type { SyncLoopHooks, SyncLoopResult } from "./hooks";
+import { ABORT_ERROR_NAME } from "./hooks";
 
 export interface SyncResult {
   success: boolean;
@@ -124,13 +126,25 @@ export class ModuleSyncer {
   }
 
   /** 批量同步所有模块：先串行同步一轮，再重试失败的 */
-  async syncAll(): Promise<void> {
+  async syncAll(hooks: SyncLoopHooks = {}): Promise<SyncLoopResult> {
+    const emit = (info: Partial<Parameters<NonNullable<SyncLoopHooks["onProgress"]>>[0]>) =>
+      hooks.onProgress?.({
+        phase: "同步模块",
+        current: 0,
+        total: 0,
+        synced: 0,
+        skipped: 0,
+        failed: 0,
+        ...info,
+      });
+
     try {
+      emit({ phase: "列举模块" });
       const oldModuleList = await this.listAll();
       const total = oldModuleList.length;
       if (total === 0) {
         logger.info(`[SyncAllModules] 📭 原站点无模块可同步，结束`);
-        return;
+        return { total: 0, synced: 0, skipped: 0, failed: 0 };
       }
 
       let successCount = 0;
@@ -142,6 +156,7 @@ export class ModuleSyncer {
 
       // 第一轮：串行同步
       for (let index = 0; index < total; index++) {
+        await hooks.checkpoint?.();
         const moduleTitle = oldModuleList[index];
         const current = index + 1;
         const remaining = total - current;
@@ -163,6 +178,15 @@ export class ModuleSyncer {
           }
           await sleep(this.options.intervalSuccess);
         }
+
+        emit({
+          current,
+          total,
+          title: moduleTitle,
+          synced: successCount - skipCount,
+          skipped: skipCount,
+          failed: failCount,
+        });
       }
 
       // 第二轮：重试失败项
@@ -174,6 +198,7 @@ export class ModuleSyncer {
         const stillFailed: string[] = [];
 
         for (const moduleTitle of failedModules) {
+          await hooks.checkpoint?.();
           logger.info(`\n[SyncAllModules] 🔁 重试中: ${moduleTitle}`);
 
           const result = await this.syncOne(moduleTitle, DEFAULT_USER);
@@ -207,7 +232,17 @@ export class ModuleSyncer {
       logger.info(`├─ 总计：${total} 个模块`);
       logger.info(`├─ 成功：${successCount} 个（含跳过 ${skipCount} 个）`);
       logger.info(`└─ 失败：${failCount} 个`);
+
+      return {
+        total,
+        synced: successCount - skipCount,
+        skipped: skipCount,
+        failed: failCount,
+      };
     } catch (error) {
+      if (error instanceof Error && error.name === ABORT_ERROR_NAME) {
+        throw error;
+      }
       logger.error(
         `[SyncAllModules] 💥 批量同步流程异常终止:`,
         getErrorMessage(error),

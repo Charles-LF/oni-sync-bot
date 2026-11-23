@@ -81,7 +81,7 @@ export class SyncCommands {
 
   private registerCommands(ctx: Context) {
     ctx
-      .command("sync <pageTitle:string>", "同步指定页面", { authority: 2 })
+      .command("sync <pageTitle:string>", "同步指定页面", { authority: 4 })
       .action(async ({ session }, pageTitle) => {
         if (!(await this.ensureBotsReady(ctx, "同步页面"))) {
           return "❌ Wiki 机器人未就绪，请检查登录配置或查看日志";
@@ -97,11 +97,11 @@ export class SyncCommands {
 
     ctx
       .command("sync.incrementalUpdate", "按水位同步最近的编辑与图片", {
-        authority: 2,
+        authority: 1,
       })
       .alias("增量更新")
       .action(async ({ session }) => {
-        const result = await ctx.syncConsole.startTask("command");
+        const result = await ctx.syncConsole.startDelta("command");
         return result.ok
           ? `✅ ${result.message}，完成后可前往控制台查看：${this.config.logsUrl}`
           : `⚠️ ${result.message}`;
@@ -117,22 +117,30 @@ export class SyncCommands {
           paused: "已暂停",
           stopped: "已停止",
         };
-        const nextRun = status.nextRunAt
-          ? new Date(status.nextRunAt).toLocaleString()
+        const nextRun = status.nextDeltaAt
+          ? new Date(status.nextDeltaAt).toLocaleString()
           : "未排期";
+
         const lines = [
-          `📊 同步任务：${stateText[status.state] ?? status.state}`,
-          `进度：${status.progress.phase} ${status.progress.current}/${status.progress.total || "?"}`,
-          status.progress.message ? `说明：${status.progress.message}` : "",
-          `下次定时：${nextRun}（${status.cron}）`,
-          status.lastSyncTime ? `上次水位：${status.lastSyncTime}` : "",
-          status.lastResult ? `上次结果：${status.lastResult}` : "",
-        ].filter(Boolean);
+          `📊 下次增量同步：${nextRun}（${status.deltaCron}）`,
+          status.lastSyncTime ? `水位：${status.lastSyncTime}` : "水位：未设置",
+        ];
+        for (const task of status.tasks) {
+          const progress = task.progress;
+          lines.push(
+            `${task.label}：${stateText[task.state] ?? task.state}` +
+              (task.state === "running" || task.state === "paused"
+                ? ` ${progress.phase} ${progress.current}/${progress.total || "?"}`
+                : task.lastSummary
+                  ? `（${task.lastSummary}）`
+                  : ""),
+          );
+        }
         return lines.join("\n");
       });
 
     ctx
-      .command("sync.allpages", "同步所有页面", { authority: 2 })
+      .command("sync.allpages", "同步所有页面", { authority: 4 })
       .action(async ({ session }) => {
         if (!(await this.ensureBotsReady(ctx, "同步所有页面"))) {
           return "❌ Wiki 机器人未就绪，请检查登录配置或查看日志";
@@ -148,7 +156,7 @@ export class SyncCommands {
 
     ctx
       .command("sync.module <moduleTitle:string>", "同步指定模块", {
-        authority: 2,
+        authority: 4,
       })
       .action(async ({ session }, moduleTitle) => {
         if (!(await this.ensureBotsReady(ctx, "同步模块"))) {
@@ -167,7 +175,7 @@ export class SyncCommands {
       });
 
     ctx
-      .command("sync.allmodules", "同步所有模块", { authority: 2 })
+      .command("sync.allmodules", "同步所有模块", { authority: 4 })
       .action(async ({ session }) => {
         if (!(await this.ensureBotsReady(ctx, "同步所有模块"))) {
           return "❌ Wiki 机器人未就绪，请检查登录配置或查看日志";
@@ -185,7 +193,7 @@ export class SyncCommands {
       });
 
     ctx
-      .command("sync.img <imgTitle:string>", "同步指定图片", { authority: 2 })
+      .command("sync.img <imgTitle:string>", "同步指定图片", { authority: 4 })
       .action(async ({ session }, imgTitle) => {
         if (!(await this.ensureBotsReady(ctx, "同步图片"))) {
           return "❌ Wiki 机器人未就绪，请检查登录配置或查看日志";
@@ -205,7 +213,7 @@ export class SyncCommands {
       });
 
     ctx
-      .command("sync.allimgs", "同步所有图片", { authority: 2 })
+      .command("sync.allimgs", "同步所有图片", { authority: 4 })
       .action(async ({ session }) => {
         if (!(await this.ensureBotsReady(ctx, "同步所有图片"))) {
           return "❌ Wiki 机器人未就绪，请检查登录配置或查看日志";
@@ -224,14 +232,14 @@ export class SyncCommands {
 
     ctx
       .command("sync.contributor <title:text>", "同步页面的贡献者", {
-        authority: 2,
+        authority: 4,
       })
       .action(async ({ session }, title) => {
         return this.syncSingleContributor(ctx, title);
       });
 
     ctx
-      .command("sync.allcontributors", "同步所有页面的贡献者", { authority: 2 })
+      .command("sync.allcontributors", "同步所有页面的贡献者", { authority: 4 })
       .action(async ({ session }) => {
         return this.syncAllContributors(ctx, "手动命令");
       });

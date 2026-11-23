@@ -507,7 +507,7 @@ onMounted(() => void reload());
   font-family: var(--el-font-family-mono, monospace);
   white-space: pre-wrap;
   word-break: break-word;
-  background: var(--el-fill-color);
+  background: var(--el-fill-color-light);
   border-radius: 4px;
 }
 

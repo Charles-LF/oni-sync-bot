@@ -3,27 +3,35 @@ import { DataService } from "@koishijs/plugin-console";
 import {} from "@koishijs/plugin-console";
 import type { DeltaSyncConfig, NotifyConfig } from "../config";
 import type { SyncLogRow } from "./databaseExtension";
-import { PageSyncer, type SyncNotifyItem } from "../sync/pageSync";
+import { PageSyncer } from "../sync/pageSync";
 import { ImageSyncer } from "../sync/imgSync";
+import { ModuleSyncer } from "../sync/moduleSync";
 import { runIncrementalSync } from "../sync/incrementalSync";
+import type { SyncLoopHooks, SyncLoopProgress } from "../sync/hooks";
 import { SyncNotifier } from "../services/syncNotifier";
 import { SyncRepository, SYNC_CONFIG_KEYS } from "../services/syncRepository";
 import type { SyncChangeListItem } from "../services/syncRepository";
 import {
   SyncTaskManager,
   type ControlResult,
-  type SyncTaskSnapshot,
+  type ProgressReporter,
+  type RunToken,
+  type SyncPanelSnapshot,
+  type SyncTaskId,
+  type SyncTaskMeta,
+  type SyncRunSummary,
 } from "../services/syncTaskManager";
+import type { SyncNotifyItem } from "../sync/pageSync";
 import { getErrorMessage, logger } from "../utils/tools";
 
-/** 控制台看到的完整状态 = 任务状态 + 定时 / 水位信息 */
-export interface SyncPanelStatus extends SyncTaskSnapshot {
-  cron: string;
-  nextRunAt?: number;
+/** 控制台看到的完整状态 = 任务状态 + 水位 / 统计 */
+export interface SyncPanelStatus extends SyncPanelSnapshot {
+  /** 增量同步的下次触发时间（由代码里的 cron 决定，页面只读） */
+  nextDeltaAt?: number;
+  deltaCron: string;
   lastSyncTime?: string;
-  lastResult?: string;
-  imageIndexCount: number;
   logCount: number;
+  imageIndexCount: number;
 }
 
 export interface SyncLogQueryPayload {
@@ -39,11 +47,8 @@ export interface SyncLogListPayload {
 }
 
 export interface SyncControlPayload {
+  taskId: SyncTaskId;
   action: "start" | "pause" | "resume" | "stop";
-}
-
-export interface SyncCronPayload {
-  expression: string;
 }
 
 export interface SyncDetailPayload {
@@ -70,10 +75,36 @@ declare module "@koishijs/console" {
     "sync/logs"(payload?: SyncLogQueryPayload): Promise<SyncLogListPayload>;
     "sync/detail"(payload: SyncDetailPayload): Promise<SyncLogRow | null>;
     "sync/control"(payload: SyncControlPayload): Promise<ControlResult>;
-    "sync/cron"(payload: SyncCronPayload): Promise<ControlResult>;
-    "sync/clearLogs"(): Promise<{ removed: number }>;
   }
 }
+
+/** 页面上的任务清单：只有增量同步不可手动控制 */
+const TASK_META: SyncTaskMeta[] = [
+  {
+    id: "delta",
+    label: "增量同步",
+    description: "按水位同步新编辑器与图片，由代码按 cron 自动运行",
+    controllable: false,
+  },
+  {
+    id: "pages",
+    label: "全量同步页面",
+    description: "遍历原站主命名空间全部页面写入 bwiki",
+    controllable: true,
+  },
+  {
+    id: "images",
+    label: "全量同步图片",
+    description: "遍历原站全部文件，SHA1 不一致才转存",
+    controllable: true,
+  },
+  {
+    id: "modules",
+    label: "全量同步模块",
+    description: "遍历 Module 命名空间全部页面写入 bwiki",
+    controllable: true,
+  },
+];
 
 /** 暴露给控制台的状态数据源 */
 class ConsoleSyncData extends DataService<SyncPanelStatus> {
@@ -89,7 +120,7 @@ class ConsoleSyncData extends DataService<SyncPanelStatus> {
   }
 }
 
-/** 同步运维面板：任务控制 + 最近更改 + 定时配置 */
+/** 同步运维面板：任务控制 + 最近更改 + 增量水位 */
 export class SyncConsole {
   public static readonly inject = {
     database: { required: true },
@@ -101,16 +132,18 @@ export class SyncConsole {
   public readonly repo: SyncRepository;
   public readonly manager: SyncTaskManager;
   private readonly notifyFn?: (items: SyncNotifyItem[]) => void;
+  /** 增量同步的 cron：只来自配置，页面不可改 */
+  private readonly deltaCron: string;
   private cronJobId = "";
-  private cronExpression: string;
-  private statusCache: SyncPanelStatus;
+  private statusCache: Partial<SyncPanelStatus> = {};
 
   constructor(
     private readonly ctx: Context,
-    private readonly config: DeltaSyncConfig & Pick<NotifyConfig, "notifyGroupIds" | "notifyBotPlatform">,
+    private readonly config: DeltaSyncConfig &
+      Pick<NotifyConfig, "notifyGroupIds" | "notifyBotPlatform">,
   ) {
     this.repo = new SyncRepository(ctx);
-    this.cronExpression = config.syncCron || "15 * * * *";
+    this.deltaCron = config.syncCron || "15 * * * *";
 
     const notifier = new SyncNotifier(
       ctx,
@@ -121,32 +154,19 @@ export class SyncConsole {
       ? (items) => void notifier.notify(items)
       : undefined;
 
-    this.manager = new SyncTaskManager(ctx, () => this.publish());
-    this.statusCache = this.compose(this.manager.snapshot());
-
+    this.manager = new SyncTaskManager(ctx, TASK_META, () => this.publish());
     ctx.plugin(ConsoleSyncData, this);
     ctx.set("syncConsole", this);
+
     this.registerListeners(ctx);
     void this.initialize();
   }
 
-  /** 读配置 → 注册定时任务 → 推送一次初始状态 */
+  /** 读库 → 注册增量 cron → 推送一次 */
   private async initialize(): Promise<void> {
     await this.repo.loadConfig();
-    const stored = this.repo.getConfig(SYNC_CONFIG_KEYS.cronSchedule);
-    if (stored) this.cronExpression = stored;
-
-    this.scheduleCron();
-    try {
-      const page = await this.repo.listChanges({ limit: 1 });
-      this.statusCache = {
-        ...this.statusCache,
-        logCount: page.totalAll,
-        imageIndexCount: await this.repo.countImages(),
-      };
-    } catch (error) {
-      logger.debug(`初始化同步统计失败：${getErrorMessage(error)}`);
-    }
+    this.scheduleDeltaCron();
+    await this.refreshStats();
     this.publish();
   }
 
@@ -157,116 +177,109 @@ export class SyncConsole {
     const next = this.ctx
       .oniCron.list()
       .find((job) => job.id === this.cronJobId)?.next;
-    const lastSyncTime = this.repo.getLastSyncTime();
-    const composed = this.compose(snapshot);
-    composed.cron = this.cronExpression;
-    composed.nextRunAt = next ? next.getTime() : undefined;
-    composed.lastSyncTime = lastSyncTime
-      ? new Date(lastSyncTime).toISOString()
-      : undefined;
-    composed.lastResult = this.repo.getConfig(SYNC_CONFIG_KEYS.lastResult) || undefined;
-    this.statusCache = composed;
-    return composed;
-  }
+    const lastSync = this.repo.getLastSyncTime();
 
-  private compose(snapshot: SyncTaskSnapshot): SyncPanelStatus {
-    return {
+    const status: SyncPanelStatus = {
       ...snapshot,
-      cron: this.cronExpression,
-      nextRunAt: this.statusCache?.nextRunAt,
-      lastSyncTime: this.statusCache?.lastSyncTime,
-      lastResult: this.statusCache?.lastResult,
-      imageIndexCount: this.statusCache?.imageIndexCount ?? 0,
-      logCount: this.statusCache?.logCount ?? 0,
+      deltaCron: this.deltaCron,
+      nextDeltaAt: next ? next.getTime() : undefined,
+      lastSyncTime: lastSync ? new Date(lastSync).toISOString() : undefined,
+      logCount: this.statusCache.logCount ?? 0,
+      imageIndexCount: this.statusCache.imageIndexCount ?? 0,
     };
+
+    // 把每个任务上次的结果补回快照（来自数据库，重启后仍可见）
+    for (const task of status.tasks) {
+      if (!task.lastSummary) {
+        task.lastSummary = this.repo.getConfig(
+          `${SYNC_CONFIG_KEYS.lastResultPrefix}${task.id}`,
+        ) || undefined;
+      }
+    }
+
+    this.statusCache = { ...status };
+    return status;
   }
 
   private publish(): void {
     this.ctx.get("console")?.patch("onisync", this.status());
   }
+
+  private async refreshStats(): Promise<void> {
+    try {
+      const page = await this.repo.listChanges({ limit: 1 });
+      this.statusCache.logCount = page.totalAll;
+      this.statusCache.imageIndexCount = await this.repo.countImages();
+    } catch (error) {
+      logger.debug(`刷新同步统计失败：${getErrorMessage(error)}`);
+    }
+  }
+
   // ---------------------------------------------------------------- 定时任务
 
-  private scheduleCron(): void {
+  /** 增量同步的调度固定由配置决定，控制台不提供修改入口 */
+  private scheduleDeltaCron(): void {
     if (this.cronJobId) {
       this.ctx.oniCron.cancel(this.cronJobId);
       this.cronJobId = "";
     }
 
     this.cronJobId = this.ctx.oniCron(
-      this.cronExpression,
+      this.deltaCron,
       async () => {
-        const result = await this.startTask("cron");
-        if (!result.ok) logger.warn(`[同步任务] 定时触发被忽略：${result.message}`);
+        const result = await this.startDelta("cron");
+        if (!result.ok) {
+          logger.warn(`[同步任务] 定时增量同步被跳过：${result.message}`);
+        }
       },
       "增量同步（页面 + 图片）",
     );
 
     if (!this.cronJobId) {
       logger.error(
-        `[同步任务] cron 表达式非法「${this.cronExpression}」，定时同步已停用；可用 .sync 命令手动同步`,
+        `[同步任务] 增量同步的 cron 表达式非法「${this.deltaCron}」，定时同步已停用`,
       );
       return;
     }
-    const next = this.ctx.oniCron.list().find((job) => job.id === this.cronJobId)?.next;
+    const next = this.ctx
+      .oniCron.list()
+      .find((job) => job.id === this.cronJobId)?.next;
     logger.info(
-      `[同步任务] 已注册增量同步定时任务：${this.cronExpression}` +
+      `[同步任务] 增量同步已排期：${this.deltaCron}` +
         (next ? `（下次 ${next.toLocaleString()}）` : ""),
     );
   }
 
-  async updateCron(expression: string): Promise<ControlResult> {
-    const trimmed = (expression || "").trim();
-    if (!trimmed) {
-      return { ok: false, message: "cron 表达式不能为空", status: this.status() };
-    }
-
-    const previous = this.cronExpression;
-    this.cronExpression = trimmed;
-    this.scheduleCron();
-
-    if (!this.cronJobId) {
-      // 表达式非法：回滚，避免把用户原来的配置搞坏
-      this.cronExpression = previous;
-      this.scheduleCron();
-      return {
-        ok: false,
-        message: `cron 表达式非法：${trimmed}，已回滚为 ${previous}`,
-        status: this.status(),
-      };
-    }
-
-    try {
-      await this.repo.setConfig(SYNC_CONFIG_KEYS.cronSchedule, trimmed);
-    } catch (error) {
-      logger.warn(`保存 cron 配置失败：${getErrorMessage(error)}`);
-    }
-    this.publish();
-    return {
-      ok: true,
-      message: `定时任务已更新为 ${trimmed}`,
-      status: this.status(),
-    };
-  }
-
   // ------------------------------------------------------------ 任务控制
 
-  async startTask(trigger: string): Promise<ControlResult> {
-    if (this.manager.busy) {
-      return {
-        ok: false,
-        message: "已有同步任务在运行，请先停止或等待完成",
-        status: this.status(),
-      };
+  /** 控制台/指令触发的入口：增量同步在这里会被拒绝 */
+  async control(payload: SyncControlPayload): Promise<ControlResult> {
+    const { taskId, action } = payload;
+
+    if (action === "start") {
+      if (taskId === "delta") {
+        return {
+          ok: false,
+          message: "增量同步由代码自动调度，不支持手动启动",
+          status: this.status(),
+        };
+      }
+      return this.startFullTask(taskId);
     }
 
-    const ready = await this.ctx.wikiBot.ensureReady();
-    if (!ready.gg || !ready.bwiki) {
-      return {
-        ok: false,
-        message: `Wiki 机器人未就绪（WIKIGG ${ready.gg ? "✅" : "❌"} / bwiki ${ready.bwiki ? "✅" : "❌"}）`,
-        status: this.status(),
-      };
-    }
+    const result =
+      action === "pause"
+        ? this.manager.pause(taskId)
+        : action === "resume"
+          ? this.manager.resume(taskId)
+          : this.manager.stop(taskId);
+    return { ...result, status: this.status() };
+  }
+
+  /** 增量同步：定时任务与 sync 命令共用 */
+  async startDelta(trigger: string): Promise<ControlResult> {
+    const ready = await this.ensureReady();
+    if (!ready.ok) return { ok: false, message: ready.message, status: this.status() };
 
     const pageSyncer = new PageSyncer(
       this.ctx.wikiBot.getGGBot(),
@@ -278,7 +291,7 @@ export class SyncConsole {
       this.ctx.wikiBot.getBWikiBot(),
     );
 
-    const result = await this.manager.start(trigger, async (token, report) => {
+    const result = await this.manager.start("delta", trigger, async (token, report) => {
       const summary = await runIncrementalSync(
         {
           source: this.ctx.wikiBot.getGGBot(),
@@ -299,53 +312,129 @@ export class SyncConsole {
           checkImages: this.config.syncCheckImages ?? true,
         },
       );
-
-      // 收尾时补一次统计信息（图片索引数量 / 日志条数）
-      const page = await this.repo.listChanges({ limit: 1 });
-      this.statusCache = {
-        ...this.statusCache,
-        logCount: page.totalAll,
-        imageIndexCount: await this.repo.countImages(),
-      };
-      this.publish();
+      await this.finishRun("delta", summary.message);
       return summary;
     });
 
     return { ...result, status: this.status() };
   }
 
-  async control(
-    action: SyncControlPayload["action"],
-  ): Promise<ControlResult> {
-    switch (action) {
-      case "start":
-        return this.startTask("console");
-      case "pause":
-        return { ...this.manager.pause(), status: this.status() };
-      case "resume":
-        return { ...this.manager.resume(), status: this.status() };
-      case "stop":
-        return { ...this.manager.stop(), status: this.status() };
-      default:
-        return {
-          ok: false,
-          message: `未知操作：${action}`,
-          status: this.status(),
-        };
+  /** 全量页面 / 图片 / 模块：可在面板上开始、暂停、停止 */
+  private async startFullTask(taskId: SyncTaskId): Promise<ControlResult> {
+    const ready = await this.ensureReady();
+    if (!ready.ok) return { ok: false, message: ready.message, status: this.status() };
+
+    const { gg, bwiki } = {
+      gg: this.ctx.wikiBot.getGGBot(),
+      bwiki: this.ctx.wikiBot.getBWikiBot(),
+    };
+
+    const result = await this.manager.start(
+      taskId,
+      "console",
+      async (token, report) => {
+        const hooks = this.createHooks(token, report, taskId);
+        let summary: SyncRunSummary;
+
+        if (taskId === "pages") {
+          const stats = await new PageSyncer(gg, bwiki, {
+            database: this.ctx.database,
+          }).syncAll(hooks);
+          summary = {
+            synced: stats.synced,
+            skipped: stats.skipped,
+            failed: stats.failed,
+            message: `页面 ${stats.total} 个：同步 ${stats.synced}、跳过 ${stats.skipped}、失败 ${stats.failed}`,
+          };
+        } else if (taskId === "images") {
+          const stats = await new ImageSyncer(gg, bwiki).syncAll(hooks);
+          summary = {
+            synced: stats.synced,
+            skipped: stats.skipped,
+            failed: stats.failed,
+            message: `图片 ${stats.total} 张：转存 ${stats.synced}、跳过 ${stats.skipped}、失败 ${stats.failed}`,
+          };
+        } else {
+          const stats = await new ModuleSyncer(gg, bwiki).syncAll(hooks);
+          summary = {
+            synced: stats.synced,
+            skipped: stats.skipped,
+            failed: stats.failed,
+            message: `模块 ${stats.total} 个：同步 ${stats.synced}、跳过 ${stats.skipped}、失败 ${stats.failed}`,
+          };
+        }
+
+        await this.finishRun(taskId, summary.message);
+        return summary;
+      },
+      true,
+    );
+
+    return { ...result, status: this.status() };
+  }
+
+  /** 把循环钩子接到任务管理器：checkpoint 负责暂停/停止，onProgress 负责上报 */
+  private createHooks(
+    token: RunToken,
+    report: ProgressReporter,
+    taskId: SyncTaskId,
+  ): SyncLoopHooks {
+    const phaseByTask: Record<SyncTaskId, string> = {
+      delta: "增量同步",
+      pages: "同步页面",
+      images: "同步图片",
+      modules: "同步模块",
+    };
+
+    return {
+      checkpoint: () => token.checkpoint(),
+      onProgress: (info: SyncLoopProgress) => {
+        report({
+          phase: info.phase || phaseByTask[taskId],
+          current: info.current,
+          total: info.total,
+          synced: info.synced,
+          skipped: info.skipped,
+          failed: info.failed,
+          message: info.title ? `正在处理 ${info.title}` : "准备中…",
+        });
+      },
+    };
+  }
+
+  private async finishRun(taskId: SyncTaskId, summary: string): Promise<void> {
+    try {
+      await this.repo.setConfig(
+        `${SYNC_CONFIG_KEYS.lastResultPrefix}${taskId}`,
+        summary,
+      );
+    } catch (error) {
+      logger.debug(`保存任务结果失败：${getErrorMessage(error)}`);
     }
+    await this.refreshStats();
+    this.publish();
+  }
+
+  private async ensureReady(): Promise<{ ok: boolean; message: string }> {
+    const ready = await this.ctx.wikiBot.ensureReady();
+    if (ready.gg && ready.bwiki) return { ok: true, message: "" };
+    return {
+      ok: false,
+      message: `Wiki 机器人未就绪（WIKIGG ${ready.gg ? "✅" : "❌"} / bwiki ${ready.bwiki ? "✅" : "❌"}）`,
+    };
   }
 
   // -------------------------------------------------------------- 最近更改
 
   async listLogs(payload: SyncLogQueryPayload = {}): Promise<SyncLogListPayload> {
     const page = await this.repo.listChanges(payload);
-    this.statusCache = { ...this.statusCache, logCount: page.totalAll };
+    this.statusCache.logCount = page.totalAll;
     return page;
   }
 
   /**
    * 点击某条记录时取详情。
-   * `diffHtml` 为空则实时向源站请求 diff 并缓存，避免一次同步就把 5000 份 diff 全存下来。
+   * `diffHtml` 为空则实时向源站请求 diff 并缓存；用 unified 格式，避免整表 HTML 撑爆体积。
    */
   async detail(id: string): Promise<SyncLogRow | null> {
     const row = await this.repo.getChange(id);
@@ -360,6 +449,7 @@ export class SyncConsole {
         fromrev: row.parentid || "prev",
         torev: row.revid,
         prop: "diff",
+        difftype: "unified",
       });
       const html: string = res?.compare?.body || res?.compare?.["*"] || "";
       if (html) {
@@ -372,13 +462,6 @@ export class SyncConsole {
     return row;
   }
 
-  async clearLogs(): Promise<{ removed: number }> {
-    const removed = await this.repo.clearChanges();
-    this.statusCache = { ...this.statusCache, logCount: 0 };
-    this.publish();
-    return { removed };
-  }
-
   // ---------------------------------------------------------------- 监听器
 
   private registerListeners(ctx: Context): void {
@@ -389,15 +472,9 @@ export class SyncConsole {
     ctx.console.addListener("sync/detail", (payload) => this.detail(payload.id), {
       authority: 0,
     });
-    // 控制动作会改动远端 wiki，按写操作对待
-    ctx.console.addListener("sync/control", (payload) => this.control(payload.action), {
-      authority: 2,
-    });
-    ctx.console.addListener("sync/cron", (payload) => this.updateCron(payload.expression), {
-      authority: 2,
-    });
-    ctx.console.addListener("sync/clearLogs", () => this.clearLogs(), {
-      authority: 2,
+    // 会改动远端 wiki，按写操作对待；全量同步权重最高（4）
+    ctx.console.addListener("sync/control", (payload) => this.control(payload), {
+      authority: 4,
     });
   }
 }

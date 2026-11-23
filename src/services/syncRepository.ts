@@ -10,10 +10,8 @@ import { getErrorMessage, logger } from "../utils/tools";
 export const SYNC_CONFIG_KEYS = {
   /** 上次成功同步的 ISO 时间串 */
   lastSyncTime: "last_sync_time",
-  /** 增量同步的 cron 表达式 */
-  cronSchedule: "cron_schedule",
-  /** 首次运行回溯的小时数（仅作参考值，随时间不变） */
-  lastResult: "last_result",
+  /** 各任务上次结果的键前缀（后面接任务 id） */
+  lastResultPrefix: "last_result:",
 } as const;
 
 /** 一次批量的插入上限：SQLite 单语句变量数有上限，200 稳妥 */
@@ -201,17 +199,19 @@ export class SyncRepository {
     this.writtenSinceTrim = 0;
     return result?.removed ?? 0;
   }
-
   /** 超出上限时删掉最旧的记录 */
   async trimChanges(max: number): Promise<number> {
     if (this.writtenSinceTrim < TRIM_EVERY) return 0;
     this.writtenSinceTrim = 0;
 
+    // 防御：配置异常（NaN / 负数 / 过小）时不要误删全部记录
+    const limit = Number.isFinite(max) ? Math.max(200, Math.floor(max)) : 5000;
+
     const rows = await this.ctx.database.get("sync_logs", {}, [
       "id",
       "timestamp",
     ]);
-    const overflow = rows.length - max;
+    const overflow = rows.length - limit;
     if (overflow <= 0) return 0;
 
     rows.sort((a, b) => a.timestamp.localeCompare(b.timestamp));

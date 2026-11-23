@@ -27,6 +27,51 @@ describe("sync 模块的依赖注入", () => {
       const result = await syncer.syncOne("教程", "tester");
       assert.equal(result.success, false);
     });
+
+    it("pageid 已被别的标题占用时，ensurePage 改为按主键覆盖而不是报错", async () => {
+      const writes: string[] = [];
+      const database = {
+        async get() {
+          return [];
+        },
+        async create() {
+          writes.push("create");
+          throw new Error("UNIQUE constraint failed: wikipages.id");
+        },
+        async set(_table: string, query: object, data: object) {
+          writes.push("set");
+          return { ...query, ...data };
+        },
+        async upsert() {
+          writes.push("upsert");
+          return {};
+        },
+      };
+      const syncer = new PageSyncer(fakeBot, fakeBot, { database: database as any });
+      await syncer.ensurePage(4872, "网孔砖");
+      assert.deepEqual(writes, ["create", "set"]);
+    });
+
+    it("页面已在库里时不写入", async () => {
+      const writes: string[] = [];
+      const database = {
+        async get() {
+          return [{ id: 1, title: "已有页面" }];
+        },
+        async create() {
+          writes.push("create");
+        },
+        async set() {
+          writes.push("set");
+        },
+        async upsert() {
+          writes.push("upsert");
+        },
+      };
+      const syncer = new PageSyncer(fakeBot, fakeBot, { database: database as any });
+      await syncer.ensurePage(1, "已有页面");
+      assert.deepEqual(writes, []);
+    });
   });
 
   describe("ModuleSyncer", () => {

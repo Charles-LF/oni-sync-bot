@@ -8,6 +8,11 @@ import {
   normalizeImageTitle,
   stripImagePrefix,
 } from "../utils/tools";
+import type {
+  SyncLoopHooks,
+  SyncLoopResult,
+} from "./hooks";
+import { ABORT_ERROR_NAME } from "./hooks";
 
 /** 图片同步的可调参数 */
 export interface ImageSyncOptions {
@@ -298,12 +303,24 @@ export class ImageSyncer {
   }
 
   /** 批量同步所有图片：先串行同步一轮，再重试失败的 */
-  async syncAll(): Promise<void> {
+  async syncAll(hooks: SyncLoopHooks = {}): Promise<SyncLoopResult> {
+    const emit = (info: Partial<Parameters<NonNullable<SyncLoopHooks["onProgress"]>>[0]>) =>
+      hooks.onProgress?.({
+        phase: "同步图片",
+        current: 0,
+        total: 0,
+        synced: 0,
+        skipped: 0,
+        failed: 0,
+        ...info,
+      });
+
     try {
+      emit({ phase: "列举图片" });
       const imageList = await this.listAll();
       if (imageList.length === 0) {
         logger.info(`[SyncAllImg] 📭 源站无图片可同步，结束`);
-        return;
+        return { total: 0, synced: 0, skipped: 0, failed: 0 };
       }
 
       let successCount = 0;
@@ -316,6 +333,7 @@ export class ImageSyncer {
       );
 
       for (let i = 0; i < imageList.length; i++) {
+        await hooks.checkpoint?.();
         const fileName = imageList[i];
         const progress = ((i + 1) / imageList.length) * 100;
 
@@ -335,6 +353,15 @@ export class ImageSyncer {
           }
           await sleep(this.options.intervalSuccess);
         }
+
+        emit({
+          current: i + 1,
+          total: imageList.length,
+          title: stripImagePrefix(fileName),
+          synced: successCount - skipCount,
+          skipped: skipCount,
+          failed: failCount,
+        });
       }
 
       if (failedImages.length > 0) {
@@ -344,6 +371,7 @@ export class ImageSyncer {
         const stillFailed: string[] = [];
 
         for (const fileName of failedImages) {
+          await hooks.checkpoint?.();
           logger.info(`\n[SyncAllImg] 🔁 重试: ${fileName}`);
           const result = await this.syncOne(fileName);
 
@@ -372,7 +400,17 @@ export class ImageSyncer {
       logger.info(`├─ 总计：${imageList.length} 个图片`);
       logger.info(`├─ 成功：${successCount} 个（含跳过 ${skipCount} 个）`);
       logger.info(`└─ 失败：${failCount} 个`);
+
+      return {
+        total: imageList.length,
+        synced: successCount - skipCount,
+        skipped: skipCount,
+        failed: failCount,
+      };
     } catch (globalError) {
+      if (globalError instanceof Error && globalError.name === ABORT_ERROR_NAME) {
+        throw globalError;
+      }
       logger.error(`[SyncAllImg] 💥 同步流程异常终止:`, globalError);
       throw globalError;
     }
