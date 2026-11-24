@@ -76,20 +76,10 @@ describe("插件配置 schema", () => {
       "syncMaxImagesPerRun",
       "syncOverlapSeconds",
       "syncFallbackHours",
-      // AI 问答
-      "aiEnabled",
-      "deepseekApiKey",
-      "deepseekBaseUrl",
-      "deepseekModel",
-      "aiTemperature",
-      "aiMaxTokens",
-      "aiTimeout",
-      "aiCooldown",
-      "aiMaxQuestionLength",
-      "aiMemoryTurns",
-      "aiMemoryTtl",
-      "aiChannelMemory",
-      "aiCodeBlockMinChars",
+      "syncTaskLogLimit",
+      "syncRunKeep",
+      // AI 运营面板
+      "aiChatLogLimit",
     ];
 
     const missing = expected.filter((key) => !all.has(key));

@@ -37,11 +37,11 @@ export type AiInsightsConfig = Pick<AiConfig, "aiChatLogLimit">;
 /**
  * AI 运营面板（接口层）。
  *
- * - 对外暴露 `record()` 供 `aiQueryCommands` 写入对话记录；
+ * - `.ai` 问答已于 0.20.0 移除，这里只负责**读取**历史对话记录；
  * - 注册控制台事件 `get-ai-logs` / `get-ai-stats` / `ai/get-log`；
- * - 新记录落库后广播 `ai/chat/new`，网页端可以实时刷新。
+ * - `record()` 仍保留（写入接口 + `ai/chat/new` 广播），以后要接回问答或别的模型直接调它即可。
  *
- * 写入全部是 fire-and-forget：统计可以慢一拍，但用户等回答不能变慢。
+ * 写入路径全部是 fire-and-forget：统计可以慢一拍，但不能阻塞调用方。
  */
 export class AiInsightsConsole {
   public static readonly inject = {

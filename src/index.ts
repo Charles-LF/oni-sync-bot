@@ -10,7 +10,6 @@ import { AiInsightsConsole } from "./interface/aiInsightsConsole";
 import { SyncCommands } from "./interface/syncCommands";
 import { QueryCommands } from "./interface/queryCommands";
 import { UpdateCommands } from "./interface/updateCommands";
-import { AiQueryCommands } from "./interface/aiQueryCommands";
 
 export { Config };
 
@@ -27,7 +26,6 @@ const SUB_PLUGINS = [
   SyncCommands,
   QueryCommands,
   UpdateCommands,
-  AiQueryCommands,
 ] as const;
 
 export function apply(ctx: Context, config: Config) {

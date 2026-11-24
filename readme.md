@@ -4,7 +4,7 @@
 [![Koishi](https://img.shields.io/badge/koishi-plugin-42b983?style=flat-square)](https://koishi.chat)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-**缺氧 Wiki 镜像站同步机器人插件** — 把 [oxygennotincluded.wiki.gg](https://oxygennotincluded.wiki.gg)（下称 **GG 原站**）的内容**单向镜像**到 B站 Wiki（下称 **bwiki**），并提供拼音页面查询、AI 问答、短链接跳转与通配转发。
+**缺氧 Wiki 镜像站同步机器人插件** — 把 [oxygennotincluded.wiki.gg](https://oxygennotincluded.wiki.gg)（下称 **GG 原站**）的内容**单向镜像**到 B站 Wiki（下称 **bwiki**），并提供拼音页面查询、短链接跳转与通配转发。
 
 > 同步方向是 **GG 原站 → bwiki 单向**，不会把 bwiki 的改动回写原站。
 
@@ -43,49 +43,16 @@
 - **QQ 平台按钮** — QQ 会话下返回 markdown + 可点击按钮；其它平台返回纯文本
 - **序号选择** — 非 QQ 平台列出候选并要求 15 秒内回复序号
 
-### 🤖 AI 问答（Function Calling + mwn 实时取正文）
-
-- **Function Calling** — DeepSeek 拿到 `search_oni_bwiki(keyword)` 工具后**自己决定查什么**，
-  并支持**多轮调用**：先查「电解器」、再查「复制人」，拿到数据后自行计算（默认最多 5 轮，`aiMaxToolRounds`）
-- **复用已有 mwn 实例取正文** — `WikiBotService.fetchPagePlainText()` 走 `action=parse&prop=text`，
-  拿的是**模板/模块展开后**的 HTML，登录态失效会自动重登重放
-- **cheerio 清洗保留信息框** — 信息框（右侧关键数值）抽成 `电力：消耗 120 瓦` 这样的「标签：值」行，
-  正文数表压平为 `单元格 | 单元格`，只丢导航框 / 目录 / 脚本 / 脚注标记
-- **关键词三级解析** — `wikipages` 精确标题 → 拼音/首字母模糊匹配 → BWiki 全文检索，
-  最后才把关键词原样当标题试一次
-- **防幻觉** — 工具结果以 `role:'tool'` 回填；提示词要求「只能用资料里的数值」，
-  但**允许**基于这些数值做计算推导（如 产氧量 ÷ 每人耗氧量），并写明算式与假设
-- **数值纪律** — 写百分比必须写出分子与分母（`90 克/秒 ÷ 10 千克/秒 = 0.9%`），
-  同一个量在同一份回答里只能有一个数值；不许自造「折算系数」
-- **不许半路放弃** — 模型想用「资料未提及 / 无法计算」收场、但其实只查了一两个词条时，
-  程序会追加一次「换更基础的词条再查」的提示（每个问题只纠正一次），避免同一问题这次能答、下次说不知道
-- **数值复核（`aiSelfCheck`）** — 回答生成后，用**本次真正抓到的正文**再核对一遍：
-  程序先做预检（同一回答里出现相差 10 倍的百分比 = 必有一处算错，如 `0.9%` 与 `9%`），
-  含百分比 / 算式 / 多个数字时再让模型对照资料复核，按 `OK` / `FIX` 协议回答：
-  只说 `OK` 就保留原稿；说 `FIX` 才用修正稿，而且**修正稿的数字必须真的变了**才采纳
-  （纯粹改措辞不算修，避免把好回答换坏）；复核任何异常都沿用原稿
-- **确定性** — `aiTemperature` 默认 0，同一个问题每次走同样的检索与推导，不会一次「可以」一次「不行」
-- **强制检索** — 模型试图凭记忆作答时，程序会用 `tool_choice:'required'` 逼它再检索一次
-- **兜底收尾** — 达到最大轮数时追加「停止检索、用已有资料作答」的提示并强制 `tool_choice:'none'`，不会死循环
-- **追问** — 自己最近 2 轮问答会被带进上下文；开启 `aiChannelMemory` 时，群里刚聊过的词条也能被「耗电多少」这类**没有主语的追问**引用。
-  **多人群聊不会串台**：问题里带新词条就零历史、独立检索（详见下方「群内承接」表格）
-- **长回答折叠** — QQ 下回答超过 `aiCodeBlockMinChars`（默认 180 字）时整段塞进代码块，
-  渲染成一张可复制的卡片，手机端不再刷屏；短回答仍走普通 markdown
-
-> Wikitext 源码**只**用于同步，永远不会进入 AI 链路。AI 只看到渲染后的纯文本。
-> 正文按页缓存 10 分钟（最多 50 页），群里反复问同一页不会重复请求 bwiki。
-
 ### 📊 AI 运营面板（控制台 `/ai`）
 
-与「同步运维」并列的第二个页面，用来看机器人的 AI 使用情况：
+> **0.20.0 起 `.ai` 问答已移除**（回答质量不可控），页面保留为**历史对话的只读视图**：
+> 表里已有的记录还能查、能统计，之后不会再有新数据。命令侧回到确定性的「发链接 + 按钮」形式（见 `x` / `查wiki`）。
 
 - **三个统计卡片 + 今日提问** — 总提问数 / 独立用户数（按 QQ 去重）/ 工具调用次数
 - **7 天提问趋势** — 零依赖 SVG 折线图（面积渐变 + 网格 + 悬停数值），按**北京时间**切日
 - **最关心的游戏名词 Top 5** — 来自工具调用的 `keyword` 词频，点一下就用这个词筛对话流
 - **高频问题 Top 10** — 归一化（去空白 / 标点 / 大小写）后分组，点击同样可以筛
-- **实时对话流** — 时间 / 用户 / 问题 / 回答摘要 / 查了什么；点行看完整回答，
-  新对话由 `ai/chat/new` 广播推过来（可关掉「实时」攒成「有 N 条新对话」提示）
-- **写日志不挡回答** — 记录是 fire-and-forget 的旁路，`aiInsights` 服务缺失时问答照常工作
+- **对话流** — 时间 / 用户 / 问题 / 回答摘要 / 查了什么；点行看完整回答
 
 ### 🔌 路由
 
@@ -100,25 +67,13 @@ npm install koishi-plugin-oni-sync-bot
 yarn add koishi-plugin-oni-sync-bot
 ```
 
-### AI 相关依赖
-
-AI 问答只需要 `cheerio`（解析 `action=parse` 的 HTML），已随插件声明为 `dependencies`：
-
-```bash
-npm uninstall vectra @huggingface/transformers   # 0.12.0 起不再需要
-```
-
-> 从 0.11.x 升级时，这两个包（以及 `data/oni-vector`、`data/oni-models` 目录）
-> 都可以直接删掉：本地推理与向量索引已经移除，省下约 **180 MB 内存**与 **300 MB 安装体积**。
-
 ### 依赖服务
 
 插件需要以下 Koishi 插件（通常已随 Koishi 提供）：
 
-- `@koishijs/plugin-database`（`wikipages` / `oniaimemory` / `sync_*` 持久化）
+- `@koishijs/plugin-database`（`wikipages` / `sync_*` / `ai_chat_logs` 持久化）
 - `@koishijs/plugin-server`（短链路由）
-- `@koishijs/plugin-console`（控制台同步运维页面）
-- `@koishijs/plugin-http`（调用 DeepSeek 接口）
+- `@koishijs/plugin-console`（控制台同步运维 / AI 运营面板页面）
 - 任意适配器（可选；QQ 适配器才能看到 markdown 按钮效果）
 
 > **定时任务不依赖 `koishi-plugin-cron`**：插件内置了 `ctx.oniCron` 调度器
@@ -127,7 +82,7 @@ npm uninstall vectra @huggingface/transformers   # 0.12.0 起不再需要
 
 ## ⚙️ 配置项
 
-配置 schema 的**唯一声明处**是 [`src/config.ts`](src/config.ts)，分为六个分组：账号、站点、通知、定时任务、增量同步、AI 问答。
+配置 schema 的**唯一声明处**是 [`src/config.ts`](src/config.ts)，分为六个分组：账号、站点、通知、定时任务、增量同步、AI 运营面板。
 
 | 参数                  | 分组     | 说明                                                    | 默认值                         |
 | --------------------- | -------- | ------------------------------------------------------- | ------------------------------ |
@@ -151,36 +106,18 @@ npm uninstall vectra @huggingface/transformers   # 0.12.0 起不再需要
 | `syncTaskLogLimit`    | 增量同步 | 任务详情每次运行保留的日志条数（超出裁掉最早的）        | `500`                          |
 | `syncRunKeep`         | 增量同步 | 任务详情保留最近多少次运行（含条目与日志）              | `20`                           |
 
-### 🤖 AI 相关配置
+### 📊 AI 运营面板配置
 
-`aiEnabled` / `deepseek*` / `aiMemory*` 这几项仍然生效：
+`.ai` 问答已移除，这一组只剩对话日志的保留条数：
 
-| 参数                  | 分组 | 说明                                                          | 默认值                     |
-| --------------------- | ---- | ------------------------------------------------------------- | -------------------------- |
-| `aiEnabled`           | AI   | 启用 `.ai` 命令                                               | `true`                     |
-| `deepseekApiKey`      | AI   | DeepSeek API Key（也可用环境变量 `DEEPSEEK_API_KEY`）          | 空                         |
-| `deepseekBaseUrl`     | AI   | API 地址                                                      | `https://api.deepseek.com` |
-| `deepseekModel`       | AI   | 模型名（需支持 Function Calling，`deepseek-chat` 支持）         | `deepseek-chat`            |
-| `aiTemperature`       | AI   | 采样温度（默认 0 = 同一问题每次走同样的检索与推导，避免两次答案矛盾） | `0`                   |
-| `aiMaxTokens`         | AI   | 单次回答最大 token                                            | `700`                      |
-| `aiTimeout`           | AI   | 请求超时（毫秒）                                              | `60000`                    |
-| `aiCooldown`          | AI   | 同一用户提问冷却（秒）                                        | `5`                        |
-| `aiMaxQuestionLength` | AI   | 问题最大长度                                                  | `200`                      |
-| `aiMemoryTurns`       | AI   | 追问记忆保留的轮数（0 = 关闭）                                | `2`                        |
-| `aiMemoryTtl`         | AI   | 追问记忆过期时间（秒），超时视为新话题                        | `600`                      |
-| `aiChannelMemory`     | AI   | 群内话题承接：别人刚问过，自己接着问也能懂「那它…」            | `true`                     |
-| `aiCodeBlockMinChars` | AI   | QQ 下回答超过这么多字就塞进代码块（`0` = 始终不用）            | `180`                      |
-| `aiMaxToolRounds`     | AI   | 复合问题允许的最大工具调用轮数（超出强制收尾）                | `5`                        |
-| `aiSelfCheck`         | AI   | 回答生成后再用资料复核一遍数值（百分比换算 / 算式 / 前后矛盾），有问题就重写 | `true` |
-| `aiChatLogLimit`      | AI   | AI 运营面板对话日志保留条数（超出删最早的一批）                | `10000`                    |
+| 参数             | 分组 | 说明                                                           | 默认值  |
+| ---------------- | ---- | -------------------------------------------------------------- | ------- |
+| `aiChatLogLimit` | AI   | AI 运营面板对话日志保留条数（超出后自动删除最早的记录）        | `10000` |
 
-> **已删除的配置（0.12.5 起 schema 中不再存在）**：
-> `textSyncOnChange`、`textApiUrl`、`textTableMode`、`textMaxLength`、`textSyncInterval`，
-> 以及整组向量配置 `vectorEnabled`、`vectorIndexPath`、`embeddingModel`、`embeddingDtype`、
-> `embeddingCacheDir`、`embeddingRemoteHost`、`chunkSize`、`chunkOverlap`、`maxChunksPerPage`、
-> `retrieveTopK`、`retrieveMinScore`、`queryInstruction`、`embedBatchSize`。
-> 旧 `koishi.yml` 里残留这些键不会报错（schema 中已无这些键，程序也不再读取），但控制台不会再显示，可以放心删掉。
-
+> **已删除的配置（0.20.0 起 schema 中不再存在）**：`aiEnabled`、`deepseekApiKey`、`deepseekBaseUrl`、
+> `deepseekModel`、`aiTemperature`、`aiMaxTokens`、`aiTimeout`、`aiCooldown`、`aiMaxQuestionLength`、
+> `aiMemoryTurns`、`aiMemoryTtl`、`aiChannelMemory`、`aiCodeBlockMinChars`、`aiMaxToolRounds`、`aiSelfCheck`。
+> 旧 `koishi.yml` 里残留这些键不会报错（schema 中已无这些键，程序也不再读取），可以放心删掉。
 > **默认值形同虚设**：账号默认值是 `1`，必须改成真实账号，否则登录一定失败。
 
 ## 📚 命令列表
@@ -189,80 +126,15 @@ npm uninstall vectra @huggingface/transformers   # 0.12.0 起不再需要
 
 ### 🔍 查询
 
-| 命令                | 别名      | 说明                                | 权限 |
-| ------------------- | --------- | ----------------------------------- | ---- |
-| `x <itemName:text>` | `/查wiki` | 查询页面（标题 / 全拼 / 首字母）    | -    |
-| `ai <question:text>`| `/问缺氧` | 基于 BWIKI 资料的 AI 问答（工具调用）| -    |
-| `ai.status`         | -         | 查看 AI / BWiki 客户端状态          | 1    |
+| 命令                | 别名      | 说明                                            | 权限 |
+| ------------------- | --------- | ----------------------------------------------- | ---- |
+| `x <itemName:text>` | `/查wiki` | 查询页面（标题 / 全拼 / 首字母），返回链接 + 按钮 | -    |
 
-> 部署顺序：先 `update` 把页面列表拉进 `wikipages`（`.ai` 的关键词→标题解析依赖它，
-> 缺失时也能工作，只是会退化到 BWiki 全文检索）。
+> 部署顺序：先 `update` 把页面列表拉进 `wikipages`（标题 / 全拼 / 首字母匹配依赖它，
+> 缺失时会退化到 BWiki 全文检索）。
 >
-> 正文不再预热、不再建索引：每次提问按需通过 mwn 取一次，**结果缓存 10 分钟**。
-> bwiki 的 WAF 要求带 `Referer`，mwn 客户端已内置，无需额外配置。
->
-> **追问**：`.ai` 会按「平台 + 频道 + 用户」记住最近 2 轮（默认 10 分钟内有效）。
-> 先问「电解器耗电多少」，再问「那它能干什么」时，历史问答会一起送给模型，
-> 模型据此把「它」解析成「电解器」再去检索。
->
-> **群内承接**（`aiChannelMemory`，默认开）：群里刚聊过某个词条时，**他人的提问也能被没有主语的追问引用**。
-> 触发条件很严格，因此多人交替聊天不会串台：
->
-> | 提问 | 是否使用历史 | 结果 |
-> | --- | --- | --- |
-> | A：`电解器是干什么的` | 无历史 | 检索电解器，群话题 = 电解器 |
-> | B：`水泵有什么用` | **不使用** | 检索水泵，群话题 = 水泵 |
-> | C：`电解器耗多少电` | **不使用** | 检索电解器，群话题 = 电解器 |
-> | D：`水泵机制` | **不使用** | 检索水泵，群话题 = 水泵 |
-> | E：`耗电多少` | 承接 D 的「水泵机制」 | 沿用上一轮页面水泵 |
->
-> 判定规则：**只有问题本身没有主语**（「耗电多少」「那它能干什么」）或**点名了最近话题**
-> （「电解器的材料呢」）时才加载历史；问题里带新词条就零历史、独立检索——
-> 自己上一问的历史同样按这条规则处理，换话题时不回放。
->
-> 回放时也有区别：群内话题**只回放「问的是什么」**（包成一条注明「不是当前问题」的提示），
-> 别人的答案正文绝不会进模型；自己的历史答案压缩成 200 字摘要。
-> 答「未提及」或没查到页面的轮次不会成为群话题。
-> `💭 承接群内上一问：…` 只在本轮**真的复用了上一轮页面**时出现。
->
-> 记忆会**落库**（`oniaimemory` 表），Koishi 重启、热重载后依然能承接上一问；过期行按 `aiMemoryTtl` 自动清理。
-> `aiMemoryTurns=0` 可整体关闭。
->
-> **长回答不刷屏**：QQ 的 markdown 消息里，代码块会渲染成一张可复制的卡片。因此回答超过
-> `aiCodeBlockMinChars`（默认 180 字）时整段放进代码块，正文里的 `**加粗**`、`### 标题`、
-> `- 列表` 会先被换成 `•` 之类的纯文本（代码块不渲染 markdown），承接标注与数据来源留在块外。
-> 想让所有回答都用普通 markdown，把它设为 `0`。
-
-### 🧠 2G 内存够不够
-
-0.12.0 起 AI 链路不再加载任何本地模型，内存占用回到基线：
-
-| 阶段 | RSS |
-| ---- | --- |
-| Koishi + sqlite + http 基线 | 约 103 MB |
-| 一次问答（mwn 抓 1 页 + cheerio 解析 + 正文缓存 3 KB） | 峰值增加 < 20 MB |
-| 旧方案（q8 Embedding 模型 + 1 万块向量索引常驻） | 282 MB |
-
-- 正文缓存上限 **50 页 × 3 KB ≈ 150 KB**，可以忽略；
-- `Model`、`onnxruntime` 相关依赖已移除，Windows 上也不会再有 DLL 问题；
-- 真正的成本变成 **DeepSeek token**：一次问答通常 2 次调用，正文 3000 字 ≈ 2.5k token。
-
-> 想再省一点：把 `aiMaxTokens` 调到 `500`，并保持 `aiMemoryTurns=2`（记忆本身几乎不占内存）。
-
-**2G Windows Server 推荐档**：
-
-| 参数 | 建议值 |
-| ---- | ------ |
-| `aiMaxTokens` | `600` |
-| `aiCooldown` | `5`（防刷，顺带减少 token 消耗） |
-| `aiMemoryTurns` | `2` |
-| `aiChannelMemory` | `true` |
-
-另外两点务必做：
-
-1. **Windows 虚拟内存（页面文件）保持 ≥ 2GB**，给 Node 的 GC 留出余量；
-2. `.ai` 的瓶颈已经是 DeepSeek 的响应时间，与同步任务撞车只会让回答慢几秒，不再需要错峰。
-
+> `.ai` 问答已于 **0.20.0 移除**（回答质量不可控）。提问一律走上面这条确定性的查询链路：
+> 命中就回「页面链接 + QQ 按钮」，没命中就给候选列表让用户选序号。
 ### 🔄 同步
 
 | 命令                        | 别名       | 说明                 | 权限 |
@@ -377,7 +249,6 @@ npm uninstall vectra @huggingface/transformers   # 0.12.0 起不再需要
 | 表名        | 字段                                                                                                            |
 | ----------- | --------------------------------------------------------------------------------------------------------------- |
 | `wikipages` | `id`、`title`、`pinyin_full`、`pinyin_first`、`contributor`、`change_time`                                       |
-| `oniaimemory` | `id`（主键=记忆键）、`payload`（JSON）、`updated_at`（毫秒时间戳）                                       |
 | `sync_logs` | `id`（主键 = rcid）、`title`、`user`、`timestamp`（ISO）、`comment`、`sizeDiff`、`diffHtml`、`revid`、`parentid`、`ns` |
 | `sync_config` | `key`（主键）、`value` —— 存 `last_sync_time` / `last_result:<任务>`                                            |
 | `sync_images` | `title`（主键）、`timestamp`、`sha1`、`synced_at` —— 图片增量比对用的指纹                                     |
@@ -387,7 +258,7 @@ npm uninstall vectra @huggingface/transformers   # 0.12.0 起不再需要
 | `sync_run_logs` | `id`（`runId#seq`）、`runId`、`level`（info/warn/error）、`message`、`at`                                   |
 | `ai_chat_logs` | `id`（自增主键）、`userId`、`userName`、`question`、`answer`、`toolCalls`（JSON）、`createdAt`（timestamp）      |
 
-`wikipages` / `oniaimemory` / `sync_*` / `ai_chat_logs` 通过 `Tables` 接口增强声明（见 `databaseExtension.ts`）。
+`wikipages` / `sync_*` / `ai_chat_logs` 通过 `Tables` 接口增强声明（见 `databaseExtension.ts`）。
 `sync_runs` / `sync_run_items` / `sync_run_logs` 是任务详情抽屉的数据源，
 `syncRunKeep` 控制保留多少次运行、`syncTaskLogLimit` 控制每次运行保留的日志条数。
 `ai_chat_logs` 是 AI 运营面板的数据源，`aiChatLogLimit`（默认 1w）控制保留条数：
@@ -396,8 +267,9 @@ npm uninstall vectra @huggingface/transformers   # 0.12.0 起不再需要
 > 0.12.0 起不再维护 `wikitexts` 表（渲染文本改为按需抓取），0.12.5 起连表声明也移除了。
 > 0.14.0 起不再有 `onitodos` 表（TodoList 功能已移除）。
 > 0.17.0 起不再有 `onilogs` 表（日志中心页面已被「同步运维」取代）。
-> 旧库里的这三张表不会被自动删除，但插件**不会再读写它们**，可以自行
-> `DROP TABLE wikitexts` / `DROP TABLE onitodos` / `DROP TABLE onilogs` 回收空间。
+> 0.20.0 起不再有 `oniaimemory` 表（`.ai` 问答已移除，追问记忆随之消失）。
+> 旧库里的这些表不会被自动删除，但插件**不会再读写它们**，可以自行
+> `DROP TABLE wikitexts` / `DROP TABLE onitodos` / `DROP TABLE onilogs` / `DROP TABLE oniaimemory` 回收空间。
 
 ## 🎨 控制台界面
 
@@ -406,7 +278,7 @@ npm uninstall vectra @huggingface/transformers   # 0.12.0 起不再需要
 | 页面       | 路径          | 源码位置                   | 功能                                        |
 | ---------- | ------------- | -------------------------- | ------------------------------------------- |
 | 同步运维   | `/`（首页）   | `client/onisync/`          | 任务卡片 + 进度 + 最近更改列表（diff 抽屉）  |
-| AI 运营面板 | `/ai`        | `client/ai/`               | 统计数据看板 + 图表 + 实时对话流             |
+| AI 运营面板 | `/ai`        | `client/ai/`               | 统计数据看板 + 图表 + 对话流             |
 | 火箭计算器 | `/calculator` | `client/Rocketcalculator/` | ONI 火箭设计计算器                          |
 
 > 「同步运维」与「AI 运营面板」是两个独立路由（`order` 1000 / 1001），在侧边导航里并列，
@@ -445,11 +317,12 @@ npm uninstall vectra @huggingface/transformers   # 0.12.0 起不再需要
 | `get-ai-logs`  | 0    | `{ offset, limit, keyword }`，分页查询对话（用户名 / QQ / 问题模糊搜索） |
 | `get-ai-stats` | 0    | 看板统计：总人数 / 总提问 / 工具调用 / Top 10 问题 / Top 5 关键词 / 7 日趋势 |
 | `ai/get-log`   | 0    | 单条详情（完整 AI 回答）                           |
-| `ai/chat/new`（广播） | 0 | 新对话写入后推送摘要，前端 `ctx.on("ai/chat/new")` 实时上屏 |
+| `ai/chat/new`（广播） | 0 | 新对话写入后推送摘要（`.ai` 已移除，目前不会有广播） |
 
-- 写入路径：`.ai` 回答生成后 → `aiQueryCommands.recordChat()` → `AiChatLogUseCase.record()`
-  → `AiChatLogRepository.append()`（串行队列 + 超出 `aiChatLogLimit` 裁剪）→ 广播
-- 全程 `void` 掉 Promise：写库或广播失败只打一条 warn，用户拿到回答的时间不受影响
+- 写入路径：`AiInsightsConsole.record()` → `AiChatLogUseCase.record()`
+  → `AiChatLogRepository.append()`（串行队列 + 超出 `aiChatLogLimit` 裁剪）→ 广播 `ai/chat/new`
+  （`.ai` 已移除，目前没有调用方；接口保留，方便以后接回问答或别的模型）
+- 全程 `void` 掉 Promise：写库或广播失败只打一条 warn，不影响调用方
 - 列表只读 `answer` 生成摘要（120 字），完整回答走 `ai/get-log`，统计接口干脆不读 `answer` 列
 
 
@@ -459,7 +332,7 @@ npm uninstall vectra @huggingface/transformers   # 0.12.0 起不再需要
 ```
 src/
 ├── index.ts                  # 组合根：SUB_PLUGINS 注册表 + 控制台入口
-├── config.ts                 # 配置的唯一声明处（账号 / 站点 / 通知 / 定时 / AI）
+├── config.ts                 # 配置的唯一声明处（账号 / 站点 / 通知 / 定时 / 同步 / AI 面板）
 ├── domain/                   # 领域层：纯 TS，不依赖 Koishi / mwn / 数据库
 │   ├── ai/chatLog.ts         # 对话日志类型 + 统计聚合（趋势 / Top 问题 / Top 关键词）
 │   └── sync/
@@ -469,7 +342,6 @@ src/
 │       └── runToken.ts       # 协作式取消令牌（RunToken / SyncAbortedError）
 ├── application/              # 应用层：用例编排
 │   ├── ai/
-│   │   ├── aiMemory.ts                # 追问记忆（用户 / 群话题）与上下文选择
 │   │   └── aiChatLogUseCase.ts        # 对话日志用例（记录 / 分页 / 详情 / 统计）
 │   └── sync/
 │       ├── incrementalSyncUseCase.ts  # 增量同步用例（水位 / 拉变更 / 同步页面与图片）
@@ -478,7 +350,6 @@ src/
 │       ├── syncTypes.ts               # 任务状态 / 进度 / 汇总类型
 │       └── syncStatePort.ts           # 水位 / 变更记录 / 图片指纹的仓储端口
 ├── infrastructure/           # 基础设施层：仓储与外部输出
-│   ├── ai/aiService.ts       # DeepSeek 客户端（Function Calling）+ 提示词
 │   ├── wiki/                 # wikiBot 服务：登录 / 代理 / 透明重登录 / fetchPagePlainText
 │   ├── persistence/          # databaseExtension（表定义）+ 仓储
 │   │   ├── databaseExtension.ts
@@ -495,7 +366,6 @@ src/
 │   ├── syncConsole.ts        # 同步运维面板：任务控制 / 最近更改 / 忽略规则
 │   ├── aiInsightsConsole.ts  # AI 运营面板：对话记录写入 / 分页 / 统计 / ai/chat/new 广播
 │   ├── queryCommands.ts      # x / 查wiki
-│   ├── aiQueryCommands.ts    # ai / ai.status（Agent 多轮调度）
 │   ├── syncCommands.ts       # sync.* 命令 + 贡献者定时任务
 │   ├── updateCommands.ts     # update.* / redirect / relogin
 │   ├── routeRedirect.ts      # 短链路由
@@ -523,7 +393,7 @@ client/onisync/               # 同步运维前端
 │   └── IgnoreRulePanel.vue   # 忽略规则维护
 └── format.ts / rpc.ts / types.ts
 client/ai/                    # AI 运营面板前端
-├── ai-insights.vue           # 看板 + 图表 + 高频问题 + 实时对话流
+├── ai-insights.vue           # 看板 + 图表 + 高频问题 + 历史对话流
 ├── components/
 │   ├── TrendChart.vue        # 7 日趋势（零依赖 SVG 折线图）
 │   ├── KeywordBars.vue       # Top 5 名词（CSS 横向条形图）
@@ -546,7 +416,9 @@ WikiBotService（提供 wikiBot 服务：登录 + 取正文）
   ↓
 SyncConsole（提供 syncConsole：四个同步任务 + 最近更改 + 控制台数据源）
   ↓
-RouteRedirect / SyncCommands / QueryCommands / UpdateCommands / AiQueryCommands
+AiInsightsConsole（提供 aiInsights：AI 运营面板的只读 API）
+  ↓
+RouteRedirect / SyncCommands / QueryCommands / UpdateCommands
 ```
 
 所有子插件共享**同一个配置对象**，因此注册时统一传 `config`；不需要配置的子插件会忽略它。
@@ -559,7 +431,7 @@ RouteRedirect / SyncCommands / QueryCommands / UpdateCommands / AiQueryCommands
 | --- | --- | --- | --- |
 | Domain | `src/domain/` | 实体、值对象、业务判定（忽略规则匹配、同步三态判定）、取消令牌 | 无 |
 | Application | `src/application/` | 用例编排（增量同步、全量同步、忽略列表）、任务状态类型 | domain |
-| Infrastructure | `src/infrastructure/` | 仓储实现、wiki/AI 客户端、日志落库与广播、任务状态机 | domain / application |
+| Infrastructure | `src/infrastructure/` | 仓储实现、wiki 客户端、日志落库与广播、任务状态机 | domain / application |
 | Interface | `src/interface/`、`client/` | Koishi 命令、控制台 API、Vue 组件 | 全部 |
 
 迁移是分阶段的，**不推翻重写**：
@@ -567,50 +439,26 @@ RouteRedirect / SyncCommands / QueryCommands / UpdateCommands / AiQueryCommands
 - **P0（已完成）** 建立 domain / application / infrastructure；把「是否跳过 / 是否同步」上移到领域层（`decideIgnore` / `classifySyncResult`）；增量同步迁到 `application/sync/incrementalSyncUseCase.ts`，`sync/incrementalSync.ts` 只做转导出。
 - **P1（已完成）** Page / Image / Module 执行器只做执行与上报；`SyncReporter` 端口把日志交给 `SyncRunRecorder`，`ctx.logger` 只留致命错误与启动信息。
 - **P2（已完成）** 忽略列表改为数据库驱动，命令与控制台 API 共用 `IgnoreListUseCase`。
-- **P3（已完成）** `plugins/` → `interface/`；`wikiBotService` → `infrastructure/wiki`，`aiService` → `infrastructure/ai`，`aiMemory` → `application/ai`；仓储与表定义 → `infrastructure/persistence`；`src/services` 目录已移除。
+- **P3（已完成）** `plugins/` → `interface/`；`wikiBotService` → `infrastructure/wiki`；仓储与表定义 → `infrastructure/persistence`；`src/services` 目录已移除。
 - **P4（已完成）** 全量同步收敛成 `FullSyncUseCase`；`SyncConsole` 只剩「装配依赖 + 接运行记录器 + 注册事件」。
 - **P5（已完成）** 前端拆成 `client/onisync/components/*`（任务详情 / diff / 忽略规则）+ 共享 `format` / `rpc` / `types` / 样式。
+- **P6（已完成）** 新增 AI 运营面板（`ai_chat_logs` + `client/ai/*`）；**0.20.0 移除了 `.ai` 问答链路**（`aiQueryCommands` / `aiService` / `aiMemory` / `answerGuard`），面板保留为历史只读视图。
 
-> 后续可选（未排期）：把 `aiQueryCommands` 里的 Agent 循环抽到 `application/ai`；把 `syncTaskManager` 拆成「领域令牌 + 基础设施调度」两个更小的类。
+> 后续可选（未排期）：把 `syncTaskManager` 拆成「领域令牌 + 基础设施调度」两个更小的类。
 
-### AI 数据流
+### 查询数据流（`x` / `查wiki`）
 
 ```
-.ai 提问
-   ↓  第 N 轮（tools + tool_choice:'auto'，N ≤ aiMaxToolRounds）
-DeepSeek 拆解问题，调用 search_oni_bwiki(keyword)
-   ↓   ← 拿到资料后可以继续下一轮，换个词条再查（多轮工具调用）
-wikipages 精确标题 → 拼音/首字母模糊 → BWiki 全文检索 → 关键词原样当标题
+x 电解器
    ↓
-WikiBotService.fetchPagePlainText(title)
-   ├─ mwn.parseTitle(title, { prop:'text', redirects:true, ... })   ← 模板/模块已展开
-   ├─ extractPlainText(html, { tableMode:'flatten', maxLength:3000 })
-   └─ 进程内缓存 10 分钟 / 最多 50 页
-   ↓  role:'tool' 回填正文，循环继续
-模型不再发起 tool_calls → 这一轮的文本就是最终回答
-   （或达到轮数上限 → 追加收尾提示 + tool_choice:'none'）
+wikipages 精确标题 → 拼音/首字母模糊匹配 → BWiki 全文检索（逐级降级）
    ↓
-QQ / 纯文本 + 数据来源
-   ↓  ── 旁路，不阻塞回复 ──
-ai_chat_logs（question / answer / toolCalls）
-   ↓
-广播 ai/chat/new → AI 运营面板（控制台 `/ai`）实时上屏
+命中：MessageRenderer 输出 markdown + 可点击按钮（QQ）
+      └─ 按钮走 /gg/:id、/bw/:id 短链，直接跳到 GG 原站 / bwiki 对应页面
+未命中：列出最多 5 个候选，非 QQ 平台要求 15 秒内回复序号
 ```
 
-关键约束：
-
-| 规则 | 原因 |
-| --- | --- |
-| 每个 `tool_call` 都必须回一条 `role:'tool'` | 少一条，下一次请求会被服务端判为 400 |
-| 单轮最多 2 个检索、单次问答最多 6 个页面 | 控制延迟与 token；需要更多资料请分轮 |
-| 达到 `aiMaxToolRounds`（默认 5）时强制 `tool_choice:'none'` | 防止死循环，同时保证一定拿得到文本 |
-| 模型不调工具时用 `tool_choice:'required'` 强制一次 | 防止它凭记忆作答（缺氧数值极易记错） |
-| 允许计算推导，但只能用资料里的数值 | 「产氧量 ÷ 每人耗氧量」是推导，不是编造 |
-| 清洗不删 `<table>` | bwiki 的信息框就是 `table.infobox`，删了等于把耗电/产热/尺寸删掉 |
-
-> 抽取器优先保留信息框：`电解器` 抽出 2637 字，含 `电力：消耗 120 瓦`、`过热：75°C`；
-> `氧石精炼炉` 抽出 939 字，含 `电力：消耗 1200 瓦`、`建造时间：480 秒`。
-> 若把表格全删，这两页会掉到 586 / 2620 字且**不含任何数值**。
+> 整条链路不经过任何模型，结果**确定**：同一个关键词每次给同样的链接与按钮。
 
 ### 如何新增一个子插件
 
@@ -699,40 +547,23 @@ yarn test        # tsc 编译到 .test-build/，再用 mocha 跑
 **`❌ 未找到ID为【…】的页面`**
 页面不在本地缓存中（可能是新增页面），先执行 `update`。
 
-**`.ai` 一直回答「抱歉，资料中未提及相关信息」**
-1. 执行 `ai.status`，确认「BWiki 客户端」是 ✅；显示 ❌ 时先 `relogin`（`.ai` 取正文完全依赖 mwn 登录态）；
-2. 「本地页面缓存」为 0 说明没跑过 `update`——此时仍能用，只是关键词→标题会退化到 BWiki 全文检索，建议补跑 `update`；
-3. 确认问句里有具体名词（如「电解器耗电多少」而不是「耗电多少」），追问依赖记忆承接才能补全主语；
-4. 看日志里 `[ai] Agent 决定检索:` 那行实际抓的是哪一页：
-   - 抓到的是**别的页面** → 关键词解析偏了，把问句写得更接近页面标题；
-   - 显示 **未找到** → 该词条在 bwiki 上确实没有对应页面（或未登录）。
-
-**`.ai` 拿上一轮的资料回答了不相关的问题**
-0.12.6 起已修复：只有当问题自己没有主语（「耗电多少」）或点名上一轮页面时才沿用上一轮资料。
-如果仍出现，把日志里对应的两行贴出来——
-`[ai] 关键词「…」自带新实体且无对应页面，不使用上一轮资料（…）` 表示判定生效，
-而 `[ai] 追问「…」未命中新页面，沿用上一轮: …` 表示这次被判定为追问。
-
-**`.ai` 报「AI 服务暂时不可用」**
-日志里会带 DeepSeek 的 HTTP 状态与 message。常见原因：Key 无效、余额不足、
-模型名不支持 Function Calling（必须用 `deepseek-chat`，`deepseek-reasoner` 不支持 tools）。
-
-**`ai.status` 显示 BWiki 客户端 ❌**
-bwiki 登录失败。检查 `bwikiusername` / `bwikipassword`，执行 `relogin` 重试；
-短时间内反复失败会触发限流，需等约 5 分钟。
+**`x` / `查wiki` 返回「抱歉，资料中未提及」之类的空结果**
+1. 确认「BWiki 客户端」状态（`relogin` 后重试）；
+2. 「本地页面缓存」为 0 说明没跑过 `update`——此时仍能用，只是标题→匹配会退化到 BWiki 全文检索，建议补跑 `update`；
+3. 关键词尽量贴近页面标题（如「电解器」而不是「电解器耗电多少」）。
 
 **`sync` / `update` 命令在控制台里「消失」了**
 这些子插件依赖 `wikiBot` / `database` / `console`。若一个必需服务没就绪，整组命令都不会注册。排查：
 1. 控制台日志里是否有 `WikiBotService 初始化失败`；
-2. 是否安装了 `@koishijs/plugin-http`（`.ai` 需要）。
+2. 数据库插件是否正常加载。
 
 > 定时任务已内置（`ctx.oniCron`），与 `koishi-plugin-cron` 无关；
 > 若启动日志出现「内置 cron 调度器未就绪」，通常是子插件注册顺序被改动了。
 
 **内存占用偏高**
-- 0.12.0 起已不再加载本地模型，RSS 应回到 100~130 MB；若仍偏高，检查是否还装着旧版插件目录；
-- `data/oni-vector`、`data/oni-models` 可以直接删掉（不再读写）；
-- 仍不够时调小 `aiMaxTokens`、关掉 `aiChannelMemory`。
+- 0.12.0 起已不再加载本地模型，0.20.0 起连 AI 问答链路也移除了，RSS 应回到 100~130 MB；
+  若仍偏高，检查是否还装着旧版插件目录；
+- `data/oni-vector`、`data/oni-models` 可以直接删掉（不再读写）。
 
 **QQ 下只显示纯文本**
 markdown 与按钮依赖 `session.platform === "qq"`，请确认适配器正确上报平台。

@@ -128,90 +128,13 @@ export const DeltaSyncConfig: Schema<DeltaSyncConfig> = Schema.object({
     .max(200),
 });
 
-/** DeepSeek 问答 */
+/** AI 运营面板（`.ai` 问答已移除，这里只剩对话日志的保留条数） */
 export interface AiConfig {
-  aiEnabled: boolean;
-  deepseekApiKey: string;
-  deepseekBaseUrl: string;
-  deepseekModel: string;
-  aiTemperature: number;
-  aiMaxTokens: number;
-  aiTimeout: number;
-  aiCooldown: number;
-  aiMaxQuestionLength: number;
-  aiMemoryTurns: number;
-  aiMemoryTtl: number;
-  aiChannelMemory: boolean;
-  aiCodeBlockMinChars: number;
-  /** 单次问答最多允许多少轮工具调用（防死循环） */
-  aiMaxToolRounds: number;
-  /** 回答前是否再做一次数值复核（拿资料重核百分比与算式） */
-  aiSelfCheck: boolean;
   /** AI 对话日志保留条数（AI 运营面板的数据源） */
   aiChatLogLimit: number;
 }
 
 export const AiConfig: Schema<AiConfig> = Schema.object({
-  aiEnabled: Schema.boolean().description("启用 .ai 问答命令").default(true),
-  deepseekApiKey: Schema.string()
-    .description("DeepSeek API Key（也可用环境变量 DEEPSEEK_API_KEY）")
-    .role("secret")
-    .default(""),
-  deepseekBaseUrl: Schema.string()
-    .description("DeepSeek API 地址")
-    .default("https://api.deepseek.com"),
-  deepseekModel: Schema.string()
-    .description("使用的模型")
-    .default("deepseek-chat"),
-  aiTemperature: Schema.number()
-    .description(
-      "采样温度，越低越保守。默认 0 = 同一个问题每次都走同样的检索与推导，避免两次答案自相矛盾",
-    )
-    .default(0)
-    .min(0)
-    .max(2),
-  aiMaxTokens: Schema.natural()
-    .description("回答的最大 token 数")
-    .default(700),
-  aiTimeout: Schema.natural()
-    .description("调用 DeepSeek 的超时时间（毫秒）")
-    .default(60000),
-  aiCooldown: Schema.natural()
-    .description("同一用户连续提问的冷却时间（秒）")
-    .default(5),
-  aiMaxQuestionLength: Schema.natural()
-    .description("问题最大长度（字符），超出直接拒绝")
-    .default(200),
-  aiMemoryTurns: Schema.natural()
-    .description("短期记忆保留的问答轮数（0 表示不记忆；建议 2~3）")
-    .default(2)
-    .max(5),
-  aiMemoryTtl: Schema.natural()
-    .description("短期记忆的过期时间（秒），超过则视为新话题")
-    .default(600),
-  aiChannelMemory: Schema.boolean()
-    .description(
-      "群内追问承接：问题没有主语（「耗电多少」）时才借用群内上一问的语境",
-    )
-    .default(true),
-  aiCodeBlockMinChars: Schema.natural()
-    .description(
-      "QQ 下回答超过该字数塞进代码块（折叠可复制卡片，避免刷屏）；0 = 始终不用",
-    )
-    .default(180)
-    .max(2000),
-  aiMaxToolRounds: Schema.natural()
-    .description(
-      "复合问题允许的最大工具调用轮数（AI 可多轮检索后再计算），超出强制收尾",
-    )
-    .default(5)
-    .min(1)
-    .max(8),
-  aiSelfCheck: Schema.boolean()
-    .description(
-      "回答生成后再做一次数值复核：用资料重新核对百分比换算与算式，发现矛盾就重写（多一次模型调用）",
-    )
-    .default(true),
   aiChatLogLimit: Schema.natural()
     .description(
       "AI 对话日志保留条数，超出后自动删除最早的记录（控制台「AI 运营面板」的数据源）",
@@ -220,7 +143,6 @@ export const AiConfig: Schema<AiConfig> = Schema.object({
     .min(100)
     .max(100000),
 });
-
 /** 完整配置 = 各分组之并集，顺序即控制台展示顺序 */
 export interface Config
   extends AccountConfig,

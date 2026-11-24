@@ -19,6 +19,34 @@
 
 ---
 
+## [0.20.0] — 2026-11-24
+
+> **移除 `.ai` 问答**：回答质量不可控（漏查、数值自相矛盾、同一问题两次结论相反），
+> 问题一律回到确定性的「发链接 + 按钮」链路（`x` / `查wiki`）。
+
+### Removed
+
+- **`.ai` 命令与整条问答链路**：`interface/aiQueryCommands.ts`、`infrastructure/ai/aiService.ts`、
+  `application/ai/aiMemory.ts`、`domain/ai/answerGuard.ts`（多轮检索 / 提示词 / 追问记忆 / 数值复核全部下线）
+- **`oniaimemory` 表**（追问记忆落库）：表声明移除，旧库里的数据不会被删除，可自行 `DROP TABLE`
+- **15 个 AI 配置项**：`aiEnabled`、`deepseekApiKey`、`deepseekBaseUrl`、`deepseekModel`、`aiTemperature`、
+  `aiMaxTokens`、`aiTimeout`、`aiCooldown`、`aiMaxQuestionLength`、`aiMemoryTurns`、`aiMemoryTtl`、
+  `aiChannelMemory`、`aiCodeBlockMinChars`、`aiMaxToolRounds`、`aiSelfCheck`
+- 相关测试（`aiAgent` / `aiMemory` / `aiService` / `answerGuard`）共 88 例
+
+### Changed
+
+- 提问走 `x <词条>`（别名 `/查wiki`）：命中即回「页面链接 + QQ 按钮」，未命中给最多 5 个候选；
+  全程不经过模型，同一个关键词每次结果一致
+- **AI 运营面板（`/ai`）保留**，降级为历史对话的只读视图（统计 / 趋势 / 关键词照旧可查，不再有新数据）
+- 依赖精简：不再需要 `@koishijs/plugin-http` 调 DeepSeek
+
+### Kept
+
+- `AiInsightsConsole.record()` 与 `ai/chat/new` 广播保留，以后要接回问答或换别的模型可直接复用
+
+---
+
 ## [0.19.0] — 2026-11-24
 
 > 修 AI 查 Wiki 的两类硬伤：**同一份回答里 0.9% 写成 9%**、**同一个问题一次说行一次说不行**。
