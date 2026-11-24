@@ -1,5 +1,6 @@
 import { Context } from "koishi";
 import { RunToken, SyncAbortedError } from "../../domain/sync/runToken";
+import type { SyncLogLevel } from "../../domain/sync/ports";
 import {
   emptyProgress,
   type ControlResult,
@@ -25,6 +26,13 @@ export { RunToken, SyncAbortedError } from "../../domain/sync/runToken";
 
 /** 状态变更立即推送，进度变更节流推送 */
 const PROGRESS_NOTIFY_DELAY = 400;
+
+/** 任务生命周期日志的出口（控制台把它接到 `sync/log` 广播上） */
+export type TaskLogSink = (
+  taskId: SyncTaskId,
+  level: SyncLogLevel,
+  message: string,
+) => void;
 
 interface TaskRuntime extends SyncTaskMeta {
   state: SyncTaskState;
@@ -54,6 +62,8 @@ export class SyncTaskManager {
     private readonly ctx: Context,
     metas: SyncTaskMeta[],
     private readonly onChange: (snapshot: SyncPanelSnapshot) => void,
+    /** 生命周期日志出口；不传则只写 debug 日志 */
+    private readonly onLog?: TaskLogSink,
   ) {
     for (const meta of metas) {
       this.runtimes.set(meta.id, {
@@ -156,8 +166,7 @@ export class SyncTaskManager {
       busy.state = "paused";
       busy.progress.message = `因启动「${runtime.label}」而自动暂停，可稍后继续`;
       yielded = busy.label;
-      logger.info(`[同步任务] 「${busy.label}」让路给「${runtime.label}」`);
-    }
+      this.log(busy.id, "info", `「${busy.label}」让路给「${runtime.label}」`);    }
 
     const token = new RunToken();
     runtime.token = token;
@@ -174,7 +183,11 @@ export class SyncTaskManager {
     runtime.lastTrigger = trigger;
     this.publish(true);
 
-    logger.info(`[同步任务] 已启动「${runtime.label}」（触发方式：${trigger}）`);
+    this.log(
+      runtime.id,
+      "info",
+      `已启动「${runtime.label}」（触发方式：${trigger}）`,
+    );
     void this.execute(runtime, token, runner);
     return {
       ok: true,
@@ -201,7 +214,7 @@ export class SyncTaskManager {
         message: summary.message,
       };
       runtime.state = "idle";
-      logger.info(`[同步任务] 「${runtime.label}」完成：${summary.message}`);
+      this.log(runtime.id, "info", `「${runtime.label}」完成：${summary.message}`);
     } catch (error) {
       if (error instanceof SyncAbortedError) {
         runtime.state = "stopped";
@@ -212,14 +225,18 @@ export class SyncTaskManager {
             ? ` · ${runtime.progress.message}`
             : "";
         runtime.progress.message = `已停止（已处理 ${current}/${total || "?"}）${detail}`;
-        logger.warn(
-          `[同步任务] 「${runtime.label}」已停止（已处理 ${current}/${total || "?"}）`,
+        this.log(
+          runtime.id,
+          "warn",
+          `「${runtime.label}」已停止（已处理 ${current}/${total || "?"}）`,
         );
       } else {
         runtime.state = "idle";
         runtime.lastError = getErrorMessage(error);
-        logger.error(
-          `[同步任务] 「${runtime.label}」失败：${runtime.lastError}`,
+        this.log(
+          runtime.id,
+          "error",
+          `「${runtime.label}」失败：${runtime.lastError}`,
         );
       }
     } finally {
@@ -245,7 +262,7 @@ export class SyncTaskManager {
     runtime.state = "paused";
     runtime.progress.message = "已暂停，点击「继续」恢复";
     this.publish(true);
-    logger.info(`[同步任务] 「${runtime.label}」已暂停`);
+    this.log(runtime.id, "info", `「${runtime.label}」已暂停`);
     return { ok: true, message: "已暂停", status: this.snapshot() };
   }
 
@@ -263,7 +280,7 @@ export class SyncTaskManager {
     runtime.state = "running";
     runtime.progress.message = "已继续";
     this.publish(true);
-    logger.info(`[同步任务] 「${runtime.label}」已继续`);
+    this.log(runtime.id, "info", `「${runtime.label}」已继续`);
     return { ok: true, message: "已继续", status: this.snapshot() };
   }
 
@@ -281,7 +298,7 @@ export class SyncTaskManager {
     runtime.token?.abort();
     runtime.progress.message = "正在停止…（等待当前请求结束）";
     this.publish(true);
-    logger.info(`[同步任务] 「${runtime.label}」收到停止请求`);
+    this.log(runtime.id, "info", `「${runtime.label}」收到停止请求`);
     return { ok: true, message: "正在停止", status: this.snapshot() };
   }
 
@@ -307,6 +324,12 @@ export class SyncTaskManager {
   private report(runtime: TaskRuntime, patch: Partial<SyncProgress>): void {
     runtime.progress = { ...runtime.progress, ...patch };
     this.publish(false);
+  }
+
+  /** 生命周期日志：交给控制台广播，服务端只留 debug */
+  private log(id: SyncTaskId, level: SyncLogLevel, message: string): void {
+    this.onLog?.(id, level, message);
+    logger.debug(`[同步任务] ${message}`);
   }
 
   private publish(force: boolean): void {

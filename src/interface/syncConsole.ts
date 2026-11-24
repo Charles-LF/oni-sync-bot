@@ -230,7 +230,17 @@ export class SyncConsole {
       ? (items) => void notifier.notify(items)
       : undefined;
 
-    this.manager = new SyncTaskManager(ctx, TASK_META, () => this.publish());
+    this.manager = new SyncTaskManager(ctx, TASK_META, () => this.publish(), (taskId, level, message) => {
+      // 生命周期日志（启动 / 暂停 / 完成…）也进网页日志流，服务端不再打 info
+      this.broadcastLog({
+        runId: this.latestRunIds.get(taskId) ?? `task-${taskId}`,
+        taskId,
+        level,
+        message,
+        at: Date.now(),
+        seq: 0,
+      });
+    });
     ctx.plugin(ConsoleSyncData, this);
     ctx.set("syncConsole", this);
 

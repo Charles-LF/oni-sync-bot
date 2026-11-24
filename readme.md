@@ -396,7 +396,8 @@ npm uninstall vectra @huggingface/transformers   # 0.12.0 起不再需要
 - **没有 `update-cron`**：增量同步的表达式只来自配置，页面只展示
 - **没有清空接口**：最近更改只能查，旧记录由 `syncLogLimit` 自动裁剪
 - 状态推走 DataService `onisync`（轻量快照，进度 400ms 节流），列表按需 `send` 拉取
-- 任务日志走 `SyncRunRecorder`：先入内存缓冲、每 400ms 合并落库，同时 `broadcast` 给网页
+- 任务日志走 `SyncRunRecorder`：先入内存缓冲、每 400ms 合并落库，同时 `broadcast` 给网页；
+  任务生命周期（启动 / 暂停 / 完成 / 停止）也走同一个 `sync/log` 通道，`ctx.logger` 只在启动与致命错误时出现
 - diff 用 `difftype=unified` 拉取后在客户端按行着色（`+` 绿 / `-` 红 / `@@` 紫），
   比整表 HTML 小一个数量级，也不会出现左右两栏重复显示的问题
 
