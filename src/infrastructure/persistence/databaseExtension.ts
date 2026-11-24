@@ -1,5 +1,4 @@
 import { Context } from "koishi";
-import type { AiChatToolCall } from "../../domain/ai/chatLog";
 
 declare module "koishi" {
   interface Tables {
@@ -11,7 +10,6 @@ declare module "koishi" {
     sync_runs: SyncRunRow;
     sync_run_items: SyncRunItemRow;
     sync_run_logs: SyncRunLogRow;
-    ai_chat_logs: AiChatLogRow;
   }
 }
 
@@ -126,25 +124,6 @@ export interface SyncRunLogRow {
   at: number;
 }
 
-/**
- * AI 对话记录（控制台「AI 运营面板」的数据源）。
- *
- * `toolCalls` 用 minato 的 `json` 类型（SQLite 里存 TEXT，读写自动序列化），
- * `createdAt` 用 `timestamp`（SQLite 里存 INTEGER，读出为 Date）。
- */
-export interface AiChatLogRow {
-  id: number;
-  /** 提问者平台 ID（QQ 号） */
-  userId: string;
-  /** 提问者昵称（取不到时为空串） */
-  userName: string;
-  question: string;
-  answer: string;
-  /** `[{ name: 'search_oni_bwiki', keyword: '电解器', page: '电解器' }]` */
-  toolCalls: AiChatToolCall[];
-  createdAt: Date;
-}
-
 export class DatabaseExtension {
   public static readonly inject = ["database"];
 
@@ -251,20 +230,6 @@ export class DatabaseExtension {
         at: "integer",
       },
       { primary: "id" },
-    );
-
-    ctx.model.extend(
-      "ai_chat_logs",
-      {
-        id: "unsigned",
-        userId: "string",
-        userName: "string",
-        question: "text",
-        answer: "text",
-        toolCalls: "json",
-        createdAt: "timestamp",
-      },
-      { primary: "id", autoInc: true },
     );
   }
 }

@@ -38,21 +38,15 @@
 
 ### 🔍 页面查询
 
-- **三段精准匹配** — 标题 → 全拼 → 首字母，逐级尝试
+- **四级精准匹配** — 标题（原样）→ 全拼 → 首字母 → 标题（忽略大小写），逐级尝试；
+  英文页面 `x sandbox` 也能命中 `Sandbox`
+- **拼音重码给候选** — `pinyin_full` 重码很常见（`jidi` 既是「极地」也是「基地」），
+  命中多页时按标题排序后全部列出来让用户选，不再随机取第一条
 - **拼音模糊匹配** — 打分排序（标题包含 / 全拼前缀 / 公共前缀等），最多返回 5 条
 - **QQ 平台按钮** — QQ 会话下返回 markdown + 可点击按钮；其它平台返回纯文本
-- **序号选择** — 非 QQ 平台列出候选并要求 15 秒内回复序号
-
-### 📊 AI 运营面板（控制台 `/ai`）
-
-> **0.20.0 起 `.ai` 问答已移除**（回答质量不可控），页面保留为**历史对话的只读视图**：
-> 表里已有的记录还能查、能统计，之后不会再有新数据。命令侧回到确定性的「发链接 + 按钮」形式（见 `x` / `查wiki`）。
-
-- **三个统计卡片 + 今日提问** — 总提问数 / 独立用户数（按 QQ 去重）/ 工具调用次数
-- **7 天提问趋势** — 零依赖 SVG 折线图（面积渐变 + 网格 + 悬停数值），按**北京时间**切日
-- **最关心的游戏名词 Top 5** — 来自工具调用的 `keyword` 词频，点一下就用这个词筛对话流
-- **高频问题 Top 10** — 归一化（去空白 / 标点 / 大小写）后分组，点击同样可以筛
-- **对话流** — 时间 / 用户 / 问题 / 回答摘要 / 查了什么；点行看完整回答
+- **序号选择只认本人** — 非 QQ 平台列出候选并等 15 秒；只接受**提问者本人**在同一频道的回复，
+  群友随口发一句不会被当成序号吞掉；`3abc` / `3.5` 这类输入直接判无效
+- **页面列表缓存 60 秒** — `wikipages` 只在 `update` 时变，重复查询不再每次读全表
 
 ### 🔌 路由
 
@@ -71,9 +65,9 @@ yarn add koishi-plugin-oni-sync-bot
 
 插件需要以下 Koishi 插件（通常已随 Koishi 提供）：
 
-- `@koishijs/plugin-database`（`wikipages` / `sync_*` / `ai_chat_logs` 持久化）
+- `@koishijs/plugin-database`（`wikipages` / `sync_*` 持久化）
 - `@koishijs/plugin-server`（短链路由）
-- `@koishijs/plugin-console`（控制台同步运维 / AI 运营面板页面）
+- `@koishijs/plugin-console`（控制台同步运维页面）
 - 任意适配器（可选；QQ 适配器才能看到 markdown 按钮效果）
 
 > **定时任务不依赖 `koishi-plugin-cron`**：插件内置了 `ctx.oniCron` 调度器
@@ -82,7 +76,7 @@ yarn add koishi-plugin-oni-sync-bot
 
 ## ⚙️ 配置项
 
-配置 schema 的**唯一声明处**是 [`src/config.ts`](src/config.ts)，分为六个分组：账号、站点、通知、定时任务、增量同步、AI 运营面板。
+配置 schema 的**唯一声明处**是 [`src/config.ts`](src/config.ts)，分为五个分组：账号、站点、通知、定时任务、增量同步。
 
 | 参数                  | 分组     | 说明                                                    | 默认值                         |
 | --------------------- | -------- | ------------------------------------------------------- | ------------------------------ |
@@ -106,19 +100,13 @@ yarn add koishi-plugin-oni-sync-bot
 | `syncTaskLogLimit`    | 增量同步 | 任务详情每次运行保留的日志条数（超出裁掉最早的）        | `500`                          |
 | `syncRunKeep`         | 增量同步 | 任务详情保留最近多少次运行（含条目与日志）              | `20`                           |
 
-### 📊 AI 运营面板配置
-
-`.ai` 问答已移除，这一组只剩对话日志的保留条数：
-
-| 参数             | 分组 | 说明                                                           | 默认值  |
-| ---------------- | ---- | -------------------------------------------------------------- | ------- |
-| `aiChatLogLimit` | AI   | AI 运营面板对话日志保留条数（超出后自动删除最早的记录）        | `10000` |
-
-> **已删除的配置（0.20.0 起 schema 中不再存在）**：`aiEnabled`、`deepseekApiKey`、`deepseekBaseUrl`、
-> `deepseekModel`、`aiTemperature`、`aiMaxTokens`、`aiTimeout`、`aiCooldown`、`aiMaxQuestionLength`、
-> `aiMemoryTurns`、`aiMemoryTtl`、`aiChannelMemory`、`aiCodeBlockMinChars`、`aiMaxToolRounds`、`aiSelfCheck`。
-> 旧 `koishi.yml` 里残留这些键不会报错（schema 中已无这些键，程序也不再读取），可以放心删掉。
 > **默认值形同虚设**：账号默认值是 `1`，必须改成真实账号，否则登录一定失败。
+
+> **已删除的 AI 配置（0.20.0 / 0.21.0 起 schema 中不再存在）**：`aiEnabled`、`deepseekApiKey`、
+> `deepseekBaseUrl`、`deepseekModel`、`aiTemperature`、`aiMaxTokens`、`aiTimeout`、`aiCooldown`、
+> `aiMaxQuestionLength`、`aiMemoryTurns`、`aiMemoryTtl`、`aiChannelMemory`、`aiCodeBlockMinChars`、
+> `aiMaxToolRounds`、`aiSelfCheck`、`aiChatLogLimit`。
+> 旧 `koishi.yml` 里残留这些键不会报错（schema 中已无这些键，程序也不再读取），可以放心删掉。
 
 ## 📚 命令列表
 
@@ -133,8 +121,9 @@ yarn add koishi-plugin-oni-sync-bot
 > 部署顺序：先 `update` 把页面列表拉进 `wikipages`（标题 / 全拼 / 首字母匹配依赖它，
 > 缺失时会退化到 BWiki 全文检索）。
 >
-> `.ai` 问答已于 **0.20.0 移除**（回答质量不可控）。提问一律走上面这条确定性的查询链路：
+> `.ai` 问答已移除（0.20.0），提问一律走上面这条确定性的查询链路：
 > 命中就回「页面链接 + QQ 按钮」，没命中就给候选列表让用户选序号。
+
 ### 🔄 同步
 
 | 命令                        | 别名       | 说明                 | 权限 |
@@ -256,33 +245,28 @@ yarn add koishi-plugin-oni-sync-bot
 | `sync_runs` | `id`（主键）、`taskId`、`trigger`、`state`、`startedAt`、`finishedAt`、`message`、`total`/`synced`/`skipped`/`failed` |
 | `sync_run_items` | `id`（`runId#seq`）、`runId`、`title`、`action`（synced/skipped/failed）、`reason`、`at`                   |
 | `sync_run_logs` | `id`（`runId#seq`）、`runId`、`level`（info/warn/error）、`message`、`at`                                   |
-| `ai_chat_logs` | `id`（自增主键）、`userId`、`userName`、`question`、`answer`、`toolCalls`（JSON）、`createdAt`（timestamp）      |
 
-`wikipages` / `sync_*` / `ai_chat_logs` 通过 `Tables` 接口增强声明（见 `databaseExtension.ts`）。
+`wikipages` / `sync_*` 通过 `Tables` 接口增强声明（见 `databaseExtension.ts`）。
 `sync_runs` / `sync_run_items` / `sync_run_logs` 是任务详情抽屉的数据源，
 `syncRunKeep` 控制保留多少次运行、`syncTaskLogLimit` 控制每次运行保留的日志条数。
-`ai_chat_logs` 是 AI 运营面板的数据源，`aiChatLogLimit`（默认 1w）控制保留条数：
-每次写入后检查总数，超出就按 `id` 升序删掉最早的一批（写入串行排队，并维护内存计数，不会每写一条就全表 count）。
 
 > 0.12.0 起不再维护 `wikitexts` 表（渲染文本改为按需抓取），0.12.5 起连表声明也移除了。
 > 0.14.0 起不再有 `onitodos` 表（TodoList 功能已移除）。
 > 0.17.0 起不再有 `onilogs` 表（日志中心页面已被「同步运维」取代）。
 > 0.20.0 起不再有 `oniaimemory` 表（`.ai` 问答已移除，追问记忆随之消失）。
+> 0.21.0 起不再有 `ai_chat_logs` 表（AI 运营面板一并移除）。
 > 旧库里的这些表不会被自动删除，但插件**不会再读写它们**，可以自行
-> `DROP TABLE wikitexts` / `DROP TABLE onitodos` / `DROP TABLE onilogs` / `DROP TABLE oniaimemory` 回收空间。
+> `DROP TABLE wikitexts` / `DROP TABLE onitodos` / `DROP TABLE onilogs` /
+> `DROP TABLE oniaimemory` / `DROP TABLE ai_chat_logs` 回收空间。
 
 ## 🎨 控制台界面
 
-插件在 Koishi 控制台注册三个页面（见 [`client/index.ts`](client/index.ts)）：
+插件在 Koishi 控制台注册两个页面（见 [`client/index.ts`](client/index.ts)）：
 
 | 页面       | 路径          | 源码位置                   | 功能                                        |
 | ---------- | ------------- | -------------------------- | ------------------------------------------- |
 | 同步运维   | `/`（首页）   | `client/onisync/`          | 任务卡片 + 进度 + 最近更改列表（diff 抽屉）  |
-| AI 运营面板 | `/ai`        | `client/ai/`               | 统计数据看板 + 图表 + 对话流             |
 | 火箭计算器 | `/calculator` | `client/Rocketcalculator/` | ONI 火箭设计计算器                          |
-
-> 「同步运维」与「AI 运营面板」是两个独立路由（`order` 1000 / 1001），在侧边导航里并列，
-> 切换时各自保留自己的状态；共用样式与时间格式化放在 `client/shared/`。
 
 ### 同步运维面板
 
@@ -308,41 +292,19 @@ yarn add koishi-plugin-oni-sync-bot
 - diff 用 `difftype=unified` 拉取后在客户端按行着色（`+` 绿 / `-` 红 / `@@` 紫），
   比整表 HTML 小一个数量级，也不会出现左右两栏重复显示的问题
 
-### AI 运营面板
-
-页面对应后端 `src/interface/aiInsightsConsole.ts`，控制台事件：
-
-| 事件           | 权限 | 说明                                              |
-| -------------- | ---- | ------------------------------------------------- |
-| `get-ai-logs`  | 0    | `{ offset, limit, keyword }`，分页查询对话（用户名 / QQ / 问题模糊搜索） |
-| `get-ai-stats` | 0    | 看板统计：总人数 / 总提问 / 工具调用 / Top 10 问题 / Top 5 关键词 / 7 日趋势 |
-| `ai/get-log`   | 0    | 单条详情（完整 AI 回答）                           |
-| `ai/chat/new`（广播） | 0 | 新对话写入后推送摘要（`.ai` 已移除，目前不会有广播） |
-
-- 写入路径：`AiInsightsConsole.record()` → `AiChatLogUseCase.record()`
-  → `AiChatLogRepository.append()`（串行队列 + 超出 `aiChatLogLimit` 裁剪）→ 广播 `ai/chat/new`
-  （`.ai` 已移除，目前没有调用方；接口保留，方便以后接回问答或别的模型）
-- 全程 `void` 掉 Promise：写库或广播失败只打一条 warn，不影响调用方
-- 列表只读 `answer` 生成摘要（120 字），完整回答走 `ai/get-log`，统计接口干脆不读 `answer` 列
-
-
-
 ## 📦 项目结构
 
 ```
 src/
 ├── index.ts                  # 组合根：SUB_PLUGINS 注册表 + 控制台入口
-├── config.ts                 # 配置的唯一声明处（账号 / 站点 / 通知 / 定时 / 同步 / AI 面板）
+├── config.ts                 # 配置的唯一声明处（账号 / 站点 / 通知 / 定时 / 同步）
 ├── domain/                   # 领域层：纯 TS，不依赖 Koishi / mwn / 数据库
-│   ├── ai/chatLog.ts         # 对话日志类型 + 统计聚合（趋势 / Top 问题 / Top 关键词）
 │   └── sync/
 │       ├── ignoreRule.ts     # 忽略规则值对象 + 归一化 + 通配匹配
 │       ├── decision.ts       # 同步三态判定（synced / skipped / failed）与是否跳过
 │       ├── ports.ts          # SyncReporter 端口 + reportSyncItem
 │       └── runToken.ts       # 协作式取消令牌（RunToken / SyncAbortedError）
 ├── application/              # 应用层：用例编排
-│   ├── ai/
-│   │   └── aiChatLogUseCase.ts        # 对话日志用例（记录 / 分页 / 详情 / 统计）
 │   └── sync/
 │       ├── incrementalSyncUseCase.ts  # 增量同步用例（水位 / 拉变更 / 同步页面与图片）
 │       ├── fullSyncUseCase.ts         # 全量同步用例（页面 / 图片 / 模块）
@@ -356,7 +318,6 @@ src/
 │   │   ├── syncRepository.ts      # 水位 / 最近更改 / 图片指纹（实现 SyncStatePort）
 │   │   ├── syncIgnoreRepository.ts
 │   │   ├── syncRunRepository.ts   # sync_runs / items / logs 读写与裁剪
-│   │   └── aiChatLogRepository.ts # ai_chat_logs 写入队列 / 裁剪 / 分页 / 统计投影
 │   ├── console/
 │   │   └── syncRunRecorder.ts     # 日志缓冲落库 + sync/log 广播
 │   ├── notify/syncNotifier.ts     # 同步成功后的群通知
@@ -364,7 +325,6 @@ src/
 ├── interface/                # 接口层：Koishi 命令与控制台 API
 │   ├── cronService.ts        # 挂载 ctx.oniCron
 │   ├── syncConsole.ts        # 同步运维面板：任务控制 / 最近更改 / 忽略规则
-│   ├── aiInsightsConsole.ts  # AI 运营面板：对话记录写入 / 分页 / 统计 / ai/chat/new 广播
 │   ├── queryCommands.ts      # x / 查wiki
 │   ├── syncCommands.ts       # sync.* 命令 + 贡献者定时任务
 │   ├── updateCommands.ts     # update.* / redirect / relogin
@@ -392,13 +352,6 @@ client/onisync/               # 同步运维前端
 │   ├── ChangeDiffDrawer.vue  # 最近更改 diff 抽屉
 │   └── IgnoreRulePanel.vue   # 忽略规则维护
 └── format.ts / rpc.ts / types.ts
-client/ai/                    # AI 运营面板前端
-├── ai-insights.vue           # 看板 + 图表 + 高频问题 + 历史对话流
-├── components/
-│   ├── TrendChart.vue        # 7 日趋势（零依赖 SVG 折线图）
-│   ├── KeywordBars.vue       # Top 5 名词（CSS 横向条形图）
-│   └── ChatDetailDrawer.vue  # 单条对话详情（完整回答 + 工具调用）
-└── format.ts / types.ts
 ```
 
 ## 🧩 架构与扩展
@@ -415,8 +368,6 @@ DatabaseExtension（声明数据表）
 WikiBotService（提供 wikiBot 服务：登录 + 取正文）
   ↓
 SyncConsole（提供 syncConsole：四个同步任务 + 最近更改 + 控制台数据源）
-  ↓
-AiInsightsConsole（提供 aiInsights：AI 运营面板的只读 API）
   ↓
 RouteRedirect / SyncCommands / QueryCommands / UpdateCommands
 ```
@@ -442,7 +393,7 @@ RouteRedirect / SyncCommands / QueryCommands / UpdateCommands
 - **P3（已完成）** `plugins/` → `interface/`；`wikiBotService` → `infrastructure/wiki`；仓储与表定义 → `infrastructure/persistence`；`src/services` 目录已移除。
 - **P4（已完成）** 全量同步收敛成 `FullSyncUseCase`；`SyncConsole` 只剩「装配依赖 + 接运行记录器 + 注册事件」。
 - **P5（已完成）** 前端拆成 `client/onisync/components/*`（任务详情 / diff / 忽略规则）+ 共享 `format` / `rpc` / `types` / 样式。
-- **P6（已完成）** 新增 AI 运营面板（`ai_chat_logs` + `client/ai/*`）；**0.20.0 移除了 `.ai` 问答链路**（`aiQueryCommands` / `aiService` / `aiMemory` / `answerGuard`），面板保留为历史只读视图。
+- **P6（已完成，后整体回退）** 曾新增 AI 问答与 AI 运营面板；**0.20.0 / 0.21.0 把整条 AI 链路（问答 + 面板 + `ai_chat_logs` + `oniaimemory`）全部移除**，回到不依赖模型的确定性查询。
 
 > 后续可选（未排期）：把 `syncTaskManager` 拆成「领域令牌 + 基础设施调度」两个更小的类。
 
@@ -451,11 +402,12 @@ RouteRedirect / SyncCommands / QueryCommands / UpdateCommands
 ```
 x 电解器
    ↓
-wikipages 精确标题 → 拼音/首字母模糊匹配 → BWiki 全文检索（逐级降级）
+标题（原样）→ 全拼 → 首字母 → 标题（忽略大小写）→ 拼音/首字母模糊打分（最多 5 条）
    ↓
-命中：MessageRenderer 输出 markdown + 可点击按钮（QQ）
-      └─ 按钮走 /gg/:id、/bw/:id 短链，直接跳到 GG 原站 / bwiki 对应页面
-未命中：列出最多 5 个候选，非 QQ 平台要求 15 秒内回复序号
+命中一页：MessageRenderer 输出 markdown + 可点击按钮（QQ）
+          └─ 按钮走 /gg/:id、/bw/:id 短链，直接跳到 GG 原站 / bwiki 对应页面
+命中多页：按标题排序后全部列出（QQ 给按钮，其它平台等 15 秒序号，只认提问者本人）
+未命中：提示「按标准名称重查」或「页面可能还没同步，请管理员 update」
 ```
 
 > 整条链路不经过任何模型，结果**确定**：同一个关键词每次给同样的链接与按钮。
@@ -547,10 +499,11 @@ yarn test        # tsc 编译到 .test-build/，再用 mocha 跑
 **`❌ 未找到ID为【…】的页面`**
 页面不在本地缓存中（可能是新增页面），先执行 `update`。
 
-**`x` / `查wiki` 返回「抱歉，资料中未提及」之类的空结果**
-1. 确认「BWiki 客户端」状态（`relogin` 后重试）；
-2. 「本地页面缓存」为 0 说明没跑过 `update`——此时仍能用，只是标题→匹配会退化到 BWiki 全文检索，建议补跑 `update`；
-3. 关键词尽量贴近页面标题（如「电解器」而不是「电解器耗电多少」）。
+**`x` / `查wiki` 说「未找到」**
+1. 「本地页面缓存」为 0 说明没跑过 `update`，先执行 `update`；
+2. 关键词尽量贴近页面标题（`x 电解器` 而不是 `x 电解器耗电多少`）；也可以直接用全拼 / 首字母（`x dianjieqi`）；
+3. 页面列表缓存 60 秒，刚 `update` 完最多等 1 分钟再查；
+4. 仍然命中不了但页面确实存在 → 说明它还没同步进来，查日志里的同步结果。
 
 **`sync` / `update` 命令在控制台里「消失」了**
 这些子插件依赖 `wikiBot` / `database` / `console`。若一个必需服务没就绪，整组命令都不会注册。排查：
@@ -561,7 +514,7 @@ yarn test        # tsc 编译到 .test-build/，再用 mocha 跑
 > 若启动日志出现「内置 cron 调度器未就绪」，通常是子插件注册顺序被改动了。
 
 **内存占用偏高**
-- 0.12.0 起已不再加载本地模型，0.20.0 起连 AI 问答链路也移除了，RSS 应回到 100~130 MB；
+- 0.12.0 起已不再加载本地模型，0.20.0 / 0.21.0 又把整条 AI 链路移除，RSS 应回到 100~130 MB；
   若仍偏高，检查是否还装着旧版插件目录；
 - `data/oni-vector`、`data/oni-models` 可以直接删掉（不再读写）。
 

@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import {
   AccountConfig,
-  AiConfig,
   DeltaSyncConfig,
   NotifyConfig,
   ScheduleConfig,
@@ -23,7 +22,6 @@ const GROUPS = {
   NotifyConfig,
   ScheduleConfig,
   DeltaSyncConfig,
-  AiConfig,
 };
 
 describe("插件配置 schema", () => {
@@ -78,8 +76,6 @@ describe("插件配置 schema", () => {
       "syncFallbackHours",
       "syncTaskLogLimit",
       "syncRunKeep",
-      // AI 运营面板
-      "aiChatLogLimit",
     ];
 
     const missing = expected.filter((key) => !all.has(key));

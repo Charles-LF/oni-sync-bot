@@ -94,15 +94,17 @@ export class MessageRenderer {
   }
 
   async usageMessage(session?: Session): Promise<string | undefined> {
+    const example = `用法：\`x 电解器\`（或 \`/查wiki 电解器\`）—— 也支持全拼 / 首字母，如 \`x dianjieqi\`、\`x djq\``;
     if (this.isQQ(session)) {
       const markdown =
         "**以下是使用说明：**\n" +
+        `> ${example}\n` +
         `> GG原站点: [https://${this.domain}/gg/88888888](https://${this.domain}/gg/88888888)\n` +
         `\n> bwiki: [https://${this.domain}/bw/88888888](https://${this.domain}/bw/88888888)\n`;
       return this.send(session, markdown);
     }
     return (
-      `以下是使用说明：\nGG原站点: https://${this.domain}/gg/88888888\n` +
+      `${example}\n以下是使用说明：\nGG原站点: https://${this.domain}/gg/88888888\n` +
       `\nbwiki: https://${this.domain}/bw/88888888`
     );
   }

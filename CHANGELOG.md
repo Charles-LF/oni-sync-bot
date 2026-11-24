@@ -19,6 +19,44 @@
 
 ---
 
+## [0.21.0] — 2026-11-24
+
+> 补完 0.20.0 的清理：**AI 运营面板一并移除**，插件不再有任何 AI/模型相关代码。
+> 同时顺手修了 `x` / `查wiki` 的 5 个实际问题。
+
+### Removed
+
+- **AI 运营面板**：`client/ai/**`、`src/interface/aiInsightsConsole.ts`、`aiChatLogRepository`、
+  `aiChatLogUseCase`、`domain/ai/chatLog.ts`、`ai_chat_logs` 表声明、`aiChatLogLimit` 配置
+- 控制台回到 **同步运维 + 火箭计算器** 两个页面
+- 测试：`aiInsights.spec.ts` 移除
+
+### Fixed
+
+- **`x` 英文页面查不到**：输入被整个小写化后再去精确比对标题，`x sandbox` 匹配不到 `Sandbox`。
+  现在标题按原样比，拼音才用小写，并补了一级「标题忽略大小写」匹配
+- **`x` 拼音重码随机出结果**：`pinyin_full` / `pinyin_first` 命中多页时直接取第一条（`jidi` → 极地还是基地看数据库心情）。
+  现在命中多页会按标题排序后**全部列为候选**让用户选
+- **非 QQ 平台的序号选择会吞别人的消息**：`session.prompt()` 会把频道里任何人的下一条消息当成答案。
+  改为只接受**提问者本人**在同一频道的回复，其余消息原样放行
+- **提示写 10 秒、实际等 15 秒**：文案改为按同一常量生成
+- **`3abc` 被 `parseInt` 当成 3**：序号必须匹配 `^\d+$`
+- **「火箭计算器」特殊回复写死 `klei.vip`**：改用配置里的 `domain`
+
+### Changed
+
+- **页面列表缓存 60 秒**：`wikipages` 只在 `update` 时变化，`x` 不再每次都把全表读进内存
+  （并发查询共享同一个 in-flight Promise）
+- 帮助文案补了用法示例（`x 电解器` / `x dianjieqi` / `x djq`）
+- 未命中文案补充「页面可能还没同步，请管理员 update」
+
+### Tests
+
+- 新增 `tests/queryCommands.spec.ts`（11 例：大小写命中、拼音重码给候选、domain 取配置、缓存命中/过期、
+  只认本人回复、超时不回复、纯数字校验），179 passing
+
+---
+
 ## [0.20.0] — 2026-11-24
 
 > **移除 `.ai` 问答**：回答质量不可控（漏查、数值自相矛盾、同一问题两次结论相反），

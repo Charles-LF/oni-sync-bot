@@ -128,29 +128,13 @@ export const DeltaSyncConfig: Schema<DeltaSyncConfig> = Schema.object({
     .max(200),
 });
 
-/** AI 运营面板（`.ai` 问答已移除，这里只剩对话日志的保留条数） */
-export interface AiConfig {
-  /** AI 对话日志保留条数（AI 运营面板的数据源） */
-  aiChatLogLimit: number;
-}
-
-export const AiConfig: Schema<AiConfig> = Schema.object({
-  aiChatLogLimit: Schema.natural()
-    .description(
-      "AI 对话日志保留条数，超出后自动删除最早的记录（控制台「AI 运营面板」的数据源）",
-    )
-    .default(10000)
-    .min(100)
-    .max(100000),
-});
 /** 完整配置 = 各分组之并集，顺序即控制台展示顺序 */
 export interface Config
   extends AccountConfig,
     SiteConfig,
     NotifyConfig,
     ScheduleConfig,
-    DeltaSyncConfig,
-    AiConfig {}
+    DeltaSyncConfig {}
 
 export const Config: Schema<Config> = Schema.intersect([
   AccountConfig,
@@ -158,5 +142,4 @@ export const Config: Schema<Config> = Schema.intersect([
   NotifyConfig,
   ScheduleConfig,
   DeltaSyncConfig,
-  AiConfig,
 ] as const);
