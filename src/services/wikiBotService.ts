@@ -293,7 +293,7 @@ export class WikiBotService extends Service {
         logger.debug(`[wikiBot] 页面「${pageTitle}」不存在，跳过`);
         return null;
       }
-      logger.warn(
+      logger.debug(
         `[wikiBot] 获取「${pageTitle}」渲染 HTML 失败：${getErrorMessage(error)}`,
       );
       return null;
@@ -304,7 +304,7 @@ export class WikiBotService extends Service {
       maxLength: options.limit ?? WikiBotService.PAGE_TEXT_LIMIT,
     });
     if (!text) {
-      logger.warn(`[wikiBot] 「${pageTitle}」抽出的正文为空`);
+      logger.debug(`[wikiBot] 「${pageTitle}」抽出的正文为空`);
       return null;
     }
 

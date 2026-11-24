@@ -8,6 +8,9 @@ import {
   normalizeImageTitle,
   stripImagePrefix,
 } from "../utils/tools";
+import { decideIgnore } from "../domain/sync/decision";
+import type { IgnoreRuleSet } from "../domain/sync/ignoreRule";
+import { reportSyncItem } from "../domain/sync/ports";
 import type {
   SyncLoopHooks,
   SyncLoopResult,
@@ -39,6 +42,8 @@ const DEFAULT_OPTIONS: ImageSyncOptions = {
 export interface SyncResult {
   success: boolean;
   reason?: string;
+  /** 给人看的补充说明（命中哪条忽略规则、错误详情） */
+  detail?: string;
 }
 
 interface ImageInfo {
@@ -69,14 +74,19 @@ interface AllImageItem {
 /** 与 PageSyncer / ModuleSyncer 保持一致的构造签名 */
 export interface ImageSyncerDependencies {
   options?: Partial<ImageSyncOptions>;
+  /** 数据库驱动的忽略规则（应用层在同步开始前加载一次） */
+  ignoreRules?: IgnoreRuleSet;
 }
 
 /**
  * 把 wiki.gg 的图片文件同步到 bwiki。
  * 依赖全部由构造函数注入，可安全地实例化多份。
+ *
+ * **只负责执行**：跳过判定在领域层 `decideIgnore`，调度在应用层用例。
  */
 export class ImageSyncer {
   private readonly options: ImageSyncOptions;
+  private readonly ignoreRules?: IgnoreRuleSet;
 
   constructor(
     private readonly source: Mwn,
@@ -84,6 +94,7 @@ export class ImageSyncer {
     deps: ImageSyncerDependencies = {},
   ) {
     this.options = { ...DEFAULT_OPTIONS, ...deps.options };
+    this.ignoreRules = deps.ignoreRules;
   }
 
   async getImageInfo(site: Mwn, fileName: string): Promise<ImageInfo | null> {
@@ -119,7 +130,7 @@ export class ImageSyncer {
       };
     } catch (error) {
       const errorMsg = getErrorMessage(error);
-      logger.error(`[GetImageInfo] 获取 ${fileName} 信息失败:`, errorMsg);
+      logger.debug(`[GetImageInfo] 获取 ${fileName} 信息失败: ${errorMsg}`);
       return null;
     }
   }
@@ -169,48 +180,56 @@ export class ImageSyncer {
               format: "json",
             },
           });
-          logger.info(`[SyncImg] 🗑️ 删除旧版本 ${revid} 成功`);
+          logger.debug(`[SyncImg] 🗑️ 删除旧版本 ${revid} 成功`);
         } catch (error) {
           const errorMsg = getErrorMessage(error);
-          logger.error(`[SyncImg] ❌ 删除旧版本 ${revid} 失败:`, errorMsg);
+          logger.debug(`[SyncImg] ❌ 删除旧版本 ${revid} 失败: ${errorMsg}`);
           // 继续处理其他版本，不中断流程
         }
       }
     } catch (error) {
       const errorMsg = getErrorMessage(error);
-      logger.error(`[SyncImg] ❌ 获取版本信息失败:`, errorMsg);
+      logger.debug(`[SyncImg] ❌ 获取版本信息失败: ${errorMsg}`);
     }
   }
 
   async syncOne(fileName: string): Promise<SyncResult> {
-    if (this.options.ignoredImages.includes(fileName)) {
-      logger.info(`[SyncImg] 🚫 图片 ${fileName} 在忽略列表，跳过`);
-      return { success: true, reason: "ignored" };
+    const ignore = decideIgnore(
+      this.ignoreRules,
+      "image",
+      fileName,
+      this.options.ignoredImages.includes(fileName),
+    );
+    if (ignore.ignored) {
+      logger.debug(`[SyncImg] 🚫 图片 ${fileName} 跳过：${ignore.message}`);
+      return { success: true, reason: "ignored", detail: ignore.message };
     }
 
     const bareFileName = stripImagePrefix(fileName);
 
     try {
-      logger.info(`[SyncImg] 🚀 开始处理: ${bareFileName}`);
+      logger.debug(`[SyncImg] 🚀 开始处理: ${bareFileName}`);
 
       // 获取源站图片信息
       const sourceImageInfo = await this.getImageInfo(this.source, bareFileName);
       if (!sourceImageInfo) {
-        logger.info(`[SyncImg] ❌ 源站未找到图片: ${fileName}`);
-        return { success: false, reason: "source_missing" };
+        logger.debug(`[SyncImg] ❌ 源站未找到图片: ${fileName}`);
+        return {
+          success: false,
+          reason: "source_missing",
+          detail: "源站未找到该图片",
+        };
       }
 
       // 哈希校验
       const targetImageInfo = await this.getImageInfo(this.target, bareFileName);
-      logger.info(`原图片sha1: ${sourceImageInfo.sha1}`);
-      logger.info(`目标图片sha1: ${targetImageInfo?.sha1}`);
       if (targetImageInfo && targetImageInfo.sha1 === sourceImageInfo.sha1) {
-        logger.info(`[SyncImg] 🟡 图片 ${fileName} 已存在且内容一致，跳过`);
+        logger.debug(`[SyncImg] 🟡 图片 ${fileName} 已存在且内容一致，跳过`);
         return { success: true, reason: "no_change" };
       }
 
       // 下载图片到内存
-      logger.info(`[SyncImg] 📥 下载图片: ${sourceImageInfo.url}`);
+      logger.debug(`[SyncImg] 📥 下载图片: ${sourceImageInfo.url}`);
       const imageResponse = await fetch(sourceImageInfo.url, {
         headers: {
           "User-Agent": "OniSyncBot/1.0 (https://klei.vip; Charles@klei.vip)",
@@ -222,7 +241,7 @@ export class ImageSyncer {
       }
 
       const imageBuffer = Buffer.from(await imageResponse.arrayBuffer());
-      logger.info(
+      logger.debug(
         `[SyncImg] 📤 上传图片: ${bareFileName} (大小: ${(imageBuffer.length / 1024).toFixed(1)} KB)`,
       );
 
@@ -255,7 +274,7 @@ export class ImageSyncer {
 
       const responseData = rawResponse.data;
       if (responseData.upload && responseData.upload.result === "Success") {
-        logger.info(`[SyncImg] ✅ 图片 ${fileName} 同步成功`);
+        logger.debug(`[SyncImg] ✅ 图片 ${fileName} 同步成功`);
 
         // 删除旧版本
         await this.deleteOldVersions(this.target, fileName);
@@ -271,17 +290,17 @@ export class ImageSyncer {
         error instanceof Error &&
         error.message.includes("fileexists-no-change")
       ) {
-        logger.info(`[SyncImg] 🟡 图片 ${fileName} 已存在且内容相同，跳过`);
+        logger.debug(`[SyncImg] 🟡 图片 ${fileName} 已存在且内容相同，跳过`);
         return { success: true, reason: "no_change" };
       }
       const errMsg = getErrorMessage(error);
-      logger.error(`[SyncImg] ❌ 图片 ${fileName} 同步失败:`, errMsg);
+      logger.debug(`[SyncImg] ❌ 图片 ${fileName} 同步失败: ${errMsg}`);
       return { success: false, reason: errMsg };
     }
   }
 
-  async listAll(): Promise<string[]> {
-    logger.info(`[SyncAllImg] 📥 开始获取WikiGG所有图片`);
+  async listAll(hooks: SyncLoopHooks = {}): Promise<string[]> {
+    hooks.log?.("info", `[SyncAllImg] 📥 开始获取WikiGG所有图片`);
     const allImages: string[] = [];
 
     const queryGen = this.source.continuedQueryGen({
@@ -295,10 +314,10 @@ export class ImageSyncer {
     for await (const res of queryGen) {
       const imageItems = (res.query?.allimages || []) as AllImageItem[];
       allImages.push(...imageItems.map((img) => img.title));
-      logger.info(`[SyncAllImg] 📄 已获取 ${allImages.length} 个图片`);
+      logger.debug(`[SyncAllImg] 📄 已获取 ${allImages.length} 个图片`);
     }
 
-    logger.info(`[SyncAllImg] 📊 总计获取到 ${allImages.length} 个图片`);
+    hooks.log?.("info", `[SyncAllImg] 📊 总计获取到 ${allImages.length} 个图片`);
     return allImages;
   }
 
@@ -317,9 +336,9 @@ export class ImageSyncer {
 
     try {
       emit({ phase: "列举图片" });
-      const imageList = await this.listAll();
+      const imageList = await this.listAll(hooks);
       if (imageList.length === 0) {
-        logger.info(`[SyncAllImg] 📭 源站无图片可同步，结束`);
+        hooks.log?.("info", `[SyncAllImg] 📭 源站无图片可同步，结束`);
         return { total: 0, synced: 0, skipped: 0, failed: 0 };
       }
 
@@ -328,29 +347,28 @@ export class ImageSyncer {
       let skipCount = 0;
       const failedImages: string[] = [];
 
-      logger.info(
+      hooks.log?.(
+        "info",
         `[SyncAllImg] 🚦 开始批量同步，总计 ${imageList.length} 个图片`,
       );
 
       for (let i = 0; i < imageList.length; i++) {
         await hooks.checkpoint?.();
         const fileName = imageList[i];
-        const progress = ((i + 1) / imageList.length) * 100;
 
-        logger.info(
-          `\n[SyncAllImg] 📈 进度 ${i + 1}/${imageList.length} (${progress.toFixed(1)}%)`,
+        const outcome = reportSyncItem(
+          hooks,
+          stripImagePrefix(fileName),
+          await this.syncOne(fileName),
         );
-        const result = await this.syncOne(fileName);
 
-        if (!result.success) {
+        if (outcome.action === "failed") {
           failCount++;
           failedImages.push(fileName);
           await sleep(this.options.intervalFailed);
         } else {
           successCount++;
-          if (result.reason === "ignored" || result.reason === "no_change") {
-            skipCount++;
-          }
+          if (outcome.action === "skipped") skipCount++;
           await sleep(this.options.intervalSuccess);
         }
 
@@ -364,48 +382,52 @@ export class ImageSyncer {
         });
       }
 
+      const stillFailed: string[] = [];
       if (failedImages.length > 0) {
-        logger.info(
-          `\n[SyncAllImg] 🔄 开始重试 ${failedImages.length} 个失败图片`,
+        hooks.log?.(
+          "warn",
+          `[SyncAllImg] 🔄 开始重试 ${failedImages.length} 个失败图片`,
         );
-        const stillFailed: string[] = [];
 
         for (const fileName of failedImages) {
           await hooks.checkpoint?.();
-          logger.info(`\n[SyncAllImg] 🔁 重试: ${fileName}`);
-          const result = await this.syncOne(fileName);
-
-          if (result.success) {
-            successCount++;
-            failCount--;
-            logger.info(`[SyncAllImg] ✅ 重试成功: ${fileName}`);
-          } else {
-            stillFailed.push(fileName);
-            logger.info(`[SyncAllImg] ❌ 重试失败: ${fileName}`);
-          }
-          await sleep(this.options.intervalSuccess);
-        }
-
-        if (stillFailed.length > 0) {
-          logger.info(`\n[SyncAllImg] ❌ 最终失败列表（需手动处理）:`);
-          stillFailed.forEach((title, idx) =>
-            logger.info(`  ${idx + 1}. ${title}`),
+          const outcome = reportSyncItem(
+            hooks,
+            stripImagePrefix(fileName),
+            await this.syncOne(fileName),
+            "🔁 重试",
           );
-        } else {
-          logger.info(`\n[SyncAllImg] 🎉 所有失败图片重试成功！`);
+
+          if (outcome.action === "failed") {
+            stillFailed.push(fileName);
+            await sleep(this.options.intervalFailed);
+            continue;
+          }
+
+          successCount++;
+          failCount--;
+          if (outcome.action === "skipped") skipCount++;
+          await sleep(this.options.intervalSuccess);
         }
       }
 
-      logger.info(`\n[SyncAllImg] 📊 同步完成！`);
-      logger.info(`├─ 总计：${imageList.length} 个图片`);
-      logger.info(`├─ 成功：${successCount} 个（含跳过 ${skipCount} 个）`);
-      logger.info(`└─ 失败：${failCount} 个`);
+      hooks.log?.(
+        "info",
+        `[SyncAllImg] 🎯 同步结束：总计 ${imageList.length} 张，成功 ${successCount}（含跳过 ${skipCount}），失败 ${stillFailed.length}`,
+      );
+      if (stillFailed.length > 0) {
+        hooks.log?.(
+          "warn",
+          `❌ 重试后仍失败：${stillFailed.slice(0, 20).join("、")}` +
+            (stillFailed.length > 20 ? ` 等 ${stillFailed.length} 张` : ""),
+        );
+      }
 
       return {
         total: imageList.length,
         synced: successCount - skipCount,
         skipped: skipCount,
-        failed: failCount,
+        failed: stillFailed.length,
       };
     } catch (globalError) {
       if (globalError instanceof Error && globalError.name === ABORT_ERROR_NAME) {

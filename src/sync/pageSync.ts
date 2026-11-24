@@ -7,6 +7,9 @@ import {
   getErrorMessage,
 } from "../utils/tools";
 import { sleep, withRetry } from "../utils/async";
+import { decideIgnore } from "../domain/sync/decision";
+import type { IgnoreRuleSet } from "../domain/sync/ignoreRule";
+import { reportSyncItem } from "../domain/sync/ports";
 import type {
   SyncLoopHooks,
   SyncLoopProgress,
@@ -65,6 +68,8 @@ const DEFAULT_OPTIONS: PageSyncOptions = {
 export interface PageSyncResult {
   success: boolean;
   reason: string;
+  /** 给人看的补充说明（命中哪条忽略规则、错误详情） */
+  detail?: string;
 }
 
 interface SyncStats {
@@ -77,17 +82,21 @@ export interface PageSyncerDependencies {
   /** 数据库实例（可选），用于维护 wikipages 表 */
   database?: Database;
   options?: Partial<PageSyncOptions>;
+  /** 数据库驱动的忽略规则（应用层在同步开始前加载一次） */
+  ignoreRules?: IgnoreRuleSet;
 }
 
 /**
  * 负责页面层面的同步：单页同步与全量同步。
  *
  * 依赖（源站 / 目标站 / 数据库 / 选项）全部由构造函数注入，不再依赖模块级可变单例。
- * 增量调度由 `sync/incrementalSync.ts` 负责，本类只提供「同步一页」这种原子能力。
+ * **只负责执行**：是否跳过由领域层 `decideIgnore` 判定，
+ * 增量调度与水位推进由 `application/sync/incrementalSyncUseCase.ts` 负责。
  */
 export class PageSyncer {
   private readonly options: PageSyncOptions;
   private readonly database?: Database;
+  private readonly ignoreRules?: IgnoreRuleSet;
 
   constructor(
     private readonly source: Mwn,
@@ -96,6 +105,7 @@ export class PageSyncer {
   ) {
     this.options = { ...DEFAULT_OPTIONS, ...deps.options };
     this.database = deps.database;
+    this.ignoreRules = deps.ignoreRules;
   }
 
   // ---------------------------------------------------------------- 数据库
@@ -133,7 +143,7 @@ export class PageSyncer {
             { id: pageId },
             { title, pinyin_full, pinyin_first },
           );
-          logger.info(`[数据库初始化] ♻️ 页面 ${title} 已按 pageid 更新标题`);
+          logger.debug(`[数据库初始化] ♻️ 页面 ${title} 已按 pageid 更新标题`);
           return;
         }
 
@@ -144,7 +154,7 @@ export class PageSyncer {
             pinyin_full,
             pinyin_first,
           });
-          logger.info(`[数据库初始化] ✅ 页面 ${title} 已添加到数据库`);
+          logger.debug(`[数据库初始化] ✅ 页面 ${title} 已添加到数据库`);
         } catch (err) {
           // 兜底：上面两次查询之间被并发写入抢了主键
           await database.set(
@@ -152,7 +162,7 @@ export class PageSyncer {
             { id: pageId },
             { title, pinyin_full, pinyin_first },
           );
-          logger.info(`[数据库初始化] ♻️ 页面 ${title} 已按 pageid 更新标题`);
+          logger.debug(`[数据库初始化] ♻️ 页面 ${title} 已按 pageid 更新标题`);
         }
       });
     } catch (err) {
@@ -195,13 +205,19 @@ export class PageSyncer {
   // ------------------------------------------------------------ 单页 / 全量
 
   async syncOne(pageTitle: string, user: string): Promise<PageSyncResult> {
-    if (this.options.ignoredPages.has(pageTitle)) {
-      logger.info(`[syncSinglePage] 🚫 页面 ${pageTitle} 在忽略列表中，跳过`);
-      return { success: true, reason: "ignored" };
+    const ignore = decideIgnore(
+      this.ignoreRules,
+      "page",
+      pageTitle,
+      this.options.ignoredPages.has(pageTitle),
+    );
+    if (ignore.ignored) {
+      logger.debug(`[syncSinglePage] 🚫 页面 ${pageTitle} 跳过：${ignore.message}`);
+      return { success: true, reason: "ignored", detail: ignore.message };
     }
 
     try {
-      logger.info(`[syncSinglePage] 🚀 开始同步页面: ${pageTitle}`);
+      logger.debug(`[syncSinglePage] 🚀 开始同步页面: ${pageTitle}`);
 
       const [oldContent, newContent] = await Promise.all([
         getAndProcessPageContent(this.source, pageTitle),
@@ -209,7 +225,7 @@ export class PageSyncer {
       ]);
 
       if (oldContent === newContent) {
-        logger.info(`[syncSinglePage] 🟡 页面 ${pageTitle} 内容未改变，跳过`);
+        logger.debug(`[syncSinglePage] 🟡 页面 ${pageTitle} 内容未改变，跳过`);
         return { success: true, reason: "no_change" };
       }
 
@@ -218,17 +234,18 @@ export class PageSyncer {
         oldContent,
         `由：${user} 触发更改，此时同步`,
       );
-      logger.info(`[syncSinglePage] ✅ 页面 ${pageTitle} 同步成功`);
+      logger.debug(`[syncSinglePage] ✅ 页面 ${pageTitle} 同步成功`);
       return { success: true, reason: "synced" };
     } catch (error) {
       const errMsg = getErrorMessage(error);
-      logger.error(`[syncSinglePage] ❌ 页面 ${pageTitle} 同步失败:`, errMsg);
+      logger.debug(`[syncSinglePage] ❌ 页面 ${pageTitle} 同步失败: ${errMsg}`);
       return { success: false, reason: errMsg };
     }
   }
 
-  async listAll(): Promise<string[]> {
-    logger.info(
+  async listAll(hooks: SyncLoopHooks = {}): Promise<string[]> {
+    hooks.log?.(
+      "info",
       `[SyncAllPages] 📥 开始获取原站点所有页面（命名空间${this.options.namespace}）`,
     );
 
@@ -245,70 +262,61 @@ export class PageSyncer {
       const pageTitles =
         res.query?.allpages?.map((page: { title: string }) => page.title) || [];
       allPages.push(...pageTitles);
-      logger.info(`[SyncAllPages] 📄 已获取 ${allPages.length} 个页面`);
+      logger.debug(`[SyncAllPages] 📄 已获取 ${allPages.length} 个页面`);
     }
 
-    logger.info(`[SyncAllPages] 📊 原站点总计获取到 ${allPages.length} 个页面`);
+    hooks.log?.(
+      "info",
+      `[SyncAllPages] 📊 原站点总计获取到 ${allPages.length} 个页面`,
+    );
     return allPages;
   }
 
+  /** 处理单个页面并维护计数：三态判定来自领域层，这里只负责计数与节流 */
   private async processPageWithStats(
     pageTitle: string,
     user: string,
     stats: SyncStats,
     failedPages: string[],
+    hooks: SyncLoopHooks,
+    tag?: string,
   ): Promise<void> {
-    const syncResult = await this.syncOne(pageTitle, user);
+    const outcome = reportSyncItem(
+      hooks,
+      pageTitle,
+      await this.syncOne(pageTitle, user),
+      tag,
+    );
 
-    if (!syncResult.success) {
+    if (outcome.action === "failed") {
       stats.failCount++;
       failedPages.push(pageTitle);
       await sleep(this.options.intervalFailed);
-    } else {
-      stats.successCount++;
-      if (
-        syncResult.reason === "ignored" ||
-        syncResult.reason === "no_change"
-      ) {
-        stats.skipCount++;
-      }
-      await sleep(this.options.intervalSuccess);
+      return;
     }
+
+    stats.successCount++;
+    if (outcome.action === "skipped") stats.skipCount++;
+    await sleep(this.options.intervalSuccess);
   }
 
-  private printProgress(
-    current: number,
+  private reportFinalReport(
+    hooks: SyncLoopHooks,
     total: number,
-    pageTitle: string,
-  ): void {
-    const progress = ((current / total) * 100).toFixed(1);
-    const remaining = total - current;
-    logger.info(
-      `\n[SyncAllPages] 📈 进度 [${current}/${total}] (${progress}%) - 处理 ${pageTitle} | 剩余 ${remaining} 个`,
-    );
-  }
-
-  private printFinalReport(
-    total: number,
-    successCount: number,
-    failCount: number,
-    skipCount: number,
+    stats: SyncStats,
     stillFailed: string[],
   ): void {
-    logger.info(`\n[SyncAllPages] 📋 ===== 最终同步报告 =====`);
+    hooks.log?.(
+      "info",
+      `[SyncAllPages] 🎯 同步结束：总计 ${total} 个页面，成功 ${stats.successCount}（含跳过 ${stats.skipCount}），失败 ${stillFailed.length}`,
+    );
     if (stillFailed.length > 0) {
-      logger.info(`❌ 以下页面经过重试仍然失败，请手动检查：`);
-      stillFailed.forEach((title, idx) => {
-        logger.info(`  ${idx + 1}. ${title}`);
-      });
-    } else {
-      logger.info(`🎉 所有页面同步成功（含重试）！`);
+      hooks.log?.(
+        "warn",
+        `❌ 重试后仍失败：${stillFailed.slice(0, 20).join("、")}` +
+          (stillFailed.length > 20 ? ` 等 ${stillFailed.length} 个` : ""),
+      );
     }
-
-    logger.info(`\n[SyncAllPages] 🎯 同步流程结束！`);
-    logger.info(`├─ 总计：${total} 个页面`);
-    logger.info(`├─ 成功：${successCount} 个（含跳过 ${skipCount} 个）`);
-    logger.info(`└─ 失败：${failCount} 个`);
   }
 
   /** 全量同步所有页面：先串行同步一轮，再重试失败的 */
@@ -326,11 +334,11 @@ export class PageSyncer {
 
     try {
       emit({ phase: "列举页面" });
-      const oldPageList = await this.listAll();
+      const oldPageList = await this.listAll(hooks);
       const total = oldPageList.length;
 
       if (total === 0) {
-        logger.info(`[SyncAllPages] 📭 原站点无页面可同步，结束`);
+        hooks.log?.("info", `[SyncAllPages] 📭 原站点无页面可同步，结束`);
         return { total: 0, synced: 0, skipped: 0, failed: 0 };
       }
 
@@ -341,18 +349,18 @@ export class PageSyncer {
       };
       const failedPages: string[] = [];
 
-      logger.info(`[SyncAllPages] 🚦 开始批量同步，总计 ${total} 个页面`);
+      hooks.log?.("info", `[SyncAllPages] 🚦 开始批量同步，总计 ${total} 个页面`);
 
       // 第一轮同步
       for (let index = 0; index < total; index++) {
         await hooks.checkpoint?.();
         const pageTitle = oldPageList[index];
-        this.printProgress(index + 1, total, pageTitle);
         await this.processPageWithStats(
           pageTitle,
           this.options.defaultUser,
           stats,
           failedPages,
+          hooks,
         );
         emit({
           current: index + 1,
@@ -367,44 +375,34 @@ export class PageSyncer {
       // 第二轮重试
       const stillFailed: string[] = [];
       if (failedPages.length > 0) {
-        logger.info(
-          `\n[SyncAllPages] 🔄 ===== 开始重试 ${failedPages.length} 个失败页面 =====`,
+        hooks.log?.(
+          "warn",
+          `[SyncAllPages] 🔄 开始重试 ${failedPages.length} 个失败页面`,
         );
 
         for (const pageTitle of failedPages) {
           await hooks.checkpoint?.();
-          logger.info(`\n[SyncAllPages] 🔁 重试中: ${pageTitle}`);
-          const syncResult = await this.syncOne(
+          const outcome = reportSyncItem(
+            hooks,
             pageTitle,
-            this.options.defaultUser,
+            await this.syncOne(pageTitle, this.options.defaultUser),
+            "🔁 重试",
           );
 
-          if (syncResult.success) {
-            stats.successCount++;
-            stats.failCount--;
-            if (
-              syncResult.reason === "ignored" ||
-              syncResult.reason === "no_change"
-            ) {
-              stats.skipCount++;
-            }
-            logger.info(`[SyncAllPages] ✅ 页面 ${pageTitle} 重试成功`);
-            await sleep(this.options.intervalSuccess);
-          } else {
+          if (outcome.action === "failed") {
             stillFailed.push(pageTitle);
-            logger.info(`[SyncAllPages] ❌ 页面 ${pageTitle} 再次失败`);
             await sleep(this.options.intervalFailed);
+            continue;
           }
+
+          stats.successCount++;
+          stats.failCount--;
+          if (outcome.action === "skipped") stats.skipCount++;
+          await sleep(this.options.intervalSuccess);
         }
       }
 
-      this.printFinalReport(
-        total,
-        stats.successCount,
-        stats.failCount,
-        stats.skipCount,
-        stillFailed,
-      );
+      this.reportFinalReport(hooks, total, stats, stillFailed);
       return {
         total,
         synced: stats.successCount - stats.skipCount,

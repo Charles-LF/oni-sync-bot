@@ -37,6 +37,8 @@ export interface SyncTaskSnapshot extends SyncTaskMeta {
   lastError?: string;
   lastSummary?: string;
   lastTrigger?: string;
+  /** 最近一次运行 id（点开任务卡片时用它取详情） */
+  lastRunId?: string;
 }
 
 /** 推给控制台的整块状态 */

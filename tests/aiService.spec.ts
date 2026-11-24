@@ -47,22 +47,23 @@ function reply(message: Record<string, unknown>) {
 }
 
 describe("services/aiService 提示词", () => {
-  it("回答提示词保留防幻觉硬约束", () => {
-    assert.ok(ANSWER_SYSTEM_PROMPT.includes("严格且仅"));
-    assert.ok(ANSWER_SYSTEM_PROMPT.includes("绝对禁止编造"));
-    assert.ok(
-      ANSWER_SYSTEM_PROMPT.includes(
-        `如果资料中未提及，请直接回答：${NO_ANSWER_TEXT}`,
-      ),
-    );
-    assert.ok(ANSWER_SYSTEM_PROMPT.includes("分点的中文回答"));
-    assert.ok(ANSWER_SYSTEM_PROMPT.includes("结合对话历史理解指代"));
+  it("收尾提示词：只用已有资料，但允许计算推导", () => {
+    assert.ok(ANSWER_SYSTEM_PROMPT.includes("检索轮数已达上限"));
+    assert.ok(ANSWER_SYSTEM_PROMPT.includes("不得补充资料外的机制"));
+    assert.ok(ANSWER_SYSTEM_PROMPT.includes("计算与推导"));
+    assert.ok(ANSWER_SYSTEM_PROMPT.includes(NO_ANSWER_TEXT));
   });
 
-  it("Agent 提示词要求先调用工具、禁止凭记忆作答", () => {
+  it("Agent 提示词要求拆解问题、多轮检索、自行计算", () => {
     assert.ok(AGENT_SYSTEM_PROMPT.includes("search_oni_bwiki"));
-    assert.ok(AGENT_SYSTEM_PROMPT.includes("必须先调用工具"));
-    assert.ok(AGENT_SYSTEM_PROMPT.includes("绝对禁止编造"));
+    assert.ok(AGENT_SYSTEM_PROMPT.includes("拆解"));
+    assert.ok(AGENT_SYSTEM_PROMPT.includes("多轮调用工具"));
+    assert.ok(AGENT_SYSTEM_PROMPT.includes("计算与推导"));
+    assert.ok(
+      AGENT_SYSTEM_PROMPT.includes("严禁把整句问题塞进 keyword"),
+      "keyword 必须是专有名词",
+    );
+    assert.ok(AGENT_SYSTEM_PROMPT.includes("未提及"));
   });
 
   it("两套提示词各司其职：Agent 不管资料，回答不管检索", () => {

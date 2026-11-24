@@ -77,6 +77,8 @@ export interface DeltaSyncConfig {
   syncMaxImagesPerRun: number;
   syncOverlapSeconds: number;
   syncFallbackHours: number;
+  syncTaskLogLimit: number;
+  syncRunKeep: number;
 }
 
 export const DeltaSyncConfig: Schema<DeltaSyncConfig> = Schema.object({
@@ -112,6 +114,18 @@ export const DeltaSyncConfig: Schema<DeltaSyncConfig> = Schema.object({
     .default(24)
     .min(1)
     .max(720),
+  syncTaskLogLimit: Schema.natural()
+    .description(
+      "任务详情里每次运行保留的日志条数，超出按时间清理最早的记录",
+    )
+    .default(500)
+    .min(100)
+    .max(5000),
+  syncRunKeep: Schema.natural()
+    .description("任务详情保留最近多少次运行（含其条目与日志）")
+    .default(20)
+    .min(5)
+    .max(200),
 });
 
 /** DeepSeek 问答 */
@@ -129,6 +143,8 @@ export interface AiConfig {
   aiMemoryTtl: number;
   aiChannelMemory: boolean;
   aiCodeBlockMinChars: number;
+  /** 单次问答最多允许多少轮工具调用（防死循环） */
+  aiMaxToolRounds: number;
 }
 
 export const AiConfig: Schema<AiConfig> = Schema.object({
@@ -178,6 +194,13 @@ export const AiConfig: Schema<AiConfig> = Schema.object({
     )
     .default(180)
     .max(2000),
+  aiMaxToolRounds: Schema.natural()
+    .description(
+      "复合问题允许的最大工具调用轮数（AI 可多轮检索后再计算），超出强制收尾",
+    )
+    .default(5)
+    .min(1)
+    .max(8),
 });
 
 /** 完整配置 = 各分组之并集，顺序即控制台展示顺序 */

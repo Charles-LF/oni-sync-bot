@@ -22,8 +22,14 @@ export type AiQueryConfig = AiConfig &
 /** 工具名：AI 通过它要求程序去 BWiki 取正文 */
 export const SEARCH_TOOL_NAME = "search_oni_bwiki";
 
-/** 单次问答最多执行的检索数（比较类问题 2 个足够） */
-const MAX_TOOL_CALLS = 2;
+/** 单轮最多执行的检索数（比较类问题 2 个足够，更多请分轮） */
+const MAX_TOOL_CALLS_PER_ROUND = 2;
+
+/** 单次问答累计最多抓取多少个不同页面，防止模型无限发散 */
+const MAX_PAGES_PER_QUESTION = 6;
+
+/** 兜底轮数：配置缺失或非法时使用 */
+const DEFAULT_MAX_TOOL_ROUNDS = 5;
 
 /** 拼音模糊匹配的最低分：6 分只是「首字母包含」，不可信 */
 const MIN_FUZZY_SCORE = 8;
@@ -84,14 +90,16 @@ const SEARCH_TOOL: ToolDefinition = {
   function: {
     name: SEARCH_TOOL_NAME,
     description:
-      "检索缺氧中文 BWIKI 的页面正文（模板与模块已展开，包含信息框里的耗电、产热、尺寸、材料等数值）。询问任何游戏内容前必须先调用本工具。",
+      "检索缺氧中文 BWIKI 的某个词条正文（模板与模块已展开，包含信息框里的耗电、产热、尺寸、材料等数值）。" +
+      "复合问题请拆成多个词条、分多轮调用：例如算「电解器能供几个复制人」时，先查「电解器」，再查「复制人」。",
     parameters: {
       type: "object",
       properties: {
         keyword: {
           type: "string",
           description:
-            "要检索的缺氧词条名，优先使用游戏内标准中文名，如「电解器」「氧石精炼炉」",
+            "游戏内专有名词，只能是一个词条名（如「电解器」「氧石精炼炉」「复制人」）。" +
+            "禁止传整句问题、问句片段或口语描述（不要出现「怎么」「多少」「哪个」「有什么用」）。",
         },
       },
       required: ["keyword"],
@@ -121,6 +129,22 @@ interface PageLookup {
   text: string;
   /** 是否沿用上一轮页面（而非本轮新检索到的） */
   reused?: boolean;
+}
+
+/** 一次问答跨轮累计的检索状态 */
+interface ToolRunState {
+  sources: AiSource[];
+  pages: string[];
+  /** 已抓取的不同页面数（用于总量预算） */
+  fetched: number;
+  reusedPage?: string;
+}
+
+/** 轮数兜底：配置缺失/非法时回落到默认值，并限制在 1~8 之间 */
+function clampRounds(value: number | undefined): number {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return DEFAULT_MAX_TOOL_ROUNDS;
+  return Math.min(8, Math.max(1, Math.floor(numeric)));
 }
 
 /** 这一问可用的历史上下文 */
@@ -258,6 +282,7 @@ export class AiQueryCommands {
           `├─ AI 问答：${this.ai.enabled ? "✅ 已启用" : "❌ 未配置 API Key"}`,
           `├─ 模型：${this.config.deepseekModel}`,
           `├─ 检索方式：Function Calling（${SEARCH_TOOL_NAME}）`,
+          `├─ 多轮检索：最多 ${clampRounds(this.config.aiMaxToolRounds)} 轮（单轮 ≤ ${MAX_TOOL_CALLS_PER_ROUND} 次，累计 ≤ ${MAX_PAGES_PER_QUESTION} 个页面）`,
           `├─ BWiki 客户端：${ready ? "✅ 已登录" : "❌ 未就绪（先执行 relogin）"}`,
           `├─ 本地页面缓存：${rows.length} 个（缺失页面由 mwn 实时抓取）`,
           `├─ 会话记忆：${
@@ -278,9 +303,15 @@ export class AiQueryCommands {
   // -------------------------------------------------------------- Agent 主流程
 
   /**
-   * 一次 Agent 问答：第 1 轮 `tool_choice:'auto'` 让模型决定检索什么；
-   * 没发起调用则用 `'required'` 逼它检索一次（失败则退回直接回答）；
-   * 第 2 轮带 `tools` + `'none'`，结构合法且禁止再调工具。
+   * 一次 Agent 问答：**多轮工具调用循环**。
+   *
+   * 1. 每轮 `tool_choice:'auto'`，模型可以发起 1~2 个检索；
+   * 2. 程序执行检索，把结果以 `role:'tool'` 回填，再让模型继续；
+   * 3. 模型不再发起 `tool_calls` 时，它这一轮的内容就是最终回答（资料已在上下文里）；
+   * 4. 达到 `aiMaxToolRounds` 上限时，追加收尾提示并强制 `tool_choice:'none'`，
+   *    防止死循环，同时保证一定拿得到文本。
+   *
+   * 首轮没检索的兜底与旧版一致：用 `'required'` 逼它查一次，仍失败则退回直接回答。
    */
   private async runAgent(
     question: string,
@@ -314,64 +345,135 @@ export class AiQueryCommands {
       { role: "user", content: question },
     ];
 
-    let decision = await this.ai.complete(messages, {
-      tools: [SEARCH_TOOL],
-      toolChoice: "auto",
-    });
+    const state: ToolRunState = {
+      sources: [],
+      pages: [],
+      fetched: 0,
+      reusedPage: undefined,
+    };
+    const maxRounds = clampRounds(this.config.aiMaxToolRounds);
+    let forcedSearch = false;
 
-    if (decision.toolCalls.length === 0) {
-      this.log.info(`[ai] 模型未调用工具，改为强制检索：${question}`);
-      messages.push(decision.message);
-      try {
-        decision = await this.ai.complete(messages, {
-          tools: [SEARCH_TOOL],
-          toolChoice: "required",
-        });
-      } catch (error) {
-        // 兼容层可能不支持 'required'，别让它拖垮整次问答
-        this.log.warn(
-          `[ai] 强制检索调用失败，回退为直接回答：${getErrorMessage(error)}`,
-        );
+    for (let round = 1; round <= maxRounds; round++) {
+      const isLast = round === maxRounds;
+      if (isLast) {
+        // 最后一轮说清楚「不许再查了，用已有资料作答」，顺便把推导规则再强调一次
+        messages.push({ role: "system", content: ANSWER_SYSTEM_PROMPT });
       }
-    }
 
-    if (decision.toolCalls.length === 0) {
-      this.log.warn(
-        `[ai] 「${question}」没有产生检索调用，直接采用模型回答（可能不含资料支撑）`,
+      let decision = await this.ai.complete(messages, {
+        tools: [SEARCH_TOOL],
+        toolChoice: isLast ? "none" : "auto",
+      });
+
+      // 首轮完全没检索：补一次强制检索（兼容不支持 required 的服务端）
+      // 最后一轮已经强制 "none"，不再反向逼它检索，否则白跑一次
+      if (
+        decision.toolCalls.length === 0 &&
+        round === 1 &&
+        !isLast &&
+        !forcedSearch
+      ) {
+        forcedSearch = true;
+        this.log.info(`[ai] 模型未调用工具，改为强制检索：${question}`);
+        try {
+          const forced = await this.ai.complete(messages, {
+            tools: [SEARCH_TOOL],
+            toolChoice: "required",
+          });
+          if (forced.toolCalls.length === 0) {
+            return this.finalize(
+              question,
+              forced.content || decision.content,
+              state,
+              false,
+            );
+          }
+          decision = forced;
+        } catch (error) {
+          // 兼容层可能不支持 'required'，别让它拖垮整次问答
+          this.log.warn(
+            `[ai] 强制检索调用失败，回退为直接回答：${getErrorMessage(error)}`,
+          );
+          return this.finalize(question, decision.content, state, false);
+        }
+      }
+
+      if (decision.toolCalls.length === 0) {
+        // 模型自己决定收尾：这一轮的内容就是答案
+        return this.finalize(question, decision.content, state, state.fetched > 0);
+      }
+
+      if (isLast) {
+        // 理论上 tool_choice:'none' 不会再给 tool_calls；真给了也不能执行，
+        // 否则循环就破了。直接要求它把已有资料说清楚。
+        this.log.warn(`[ai] 最后一轮仍返回 tool_calls，忽略并强制收尾`);
+        const fallback = await this.ai.complete(messages, {
+          tools: [SEARCH_TOOL],
+          toolChoice: "none",
+        });
+        return this.finalize(question, fallback.content, state, state.fetched > 0);
+      }
+
+      messages.push(decision.message);
+      messages.push(...(await this.executeToolCalls(decision.toolCalls, turns, state)));
+      this.log.debug(
+        `[ai] 第 ${round} 轮检索完成，累计页面：${state.pages.join("、") || "（无）"}`,
       );
-      const answer = decision.content || NO_ANSWER_TEXT;
-      return { answer, sources: [], pages: [] };
     }
 
-    const toolMessages: AgentMessage[] = [];
-    const sources: AiSource[] = [];
-    const pages: string[] = [];
-    let reusedPage: string | undefined;
+    // 循环正常不会走到这里（最后一轮已强制收尾），兜底给一句「未提及」
+    return this.finalize(question, "", state, state.fetched > 0);
+  }
 
-    for (let index = 0; index < decision.toolCalls.length; index++) {
-      const call = decision.toolCalls[index];
-      if (index >= MAX_TOOL_CALLS) {
-        toolMessages.push({
+  /**
+   * 执行一轮里的 tool_calls，返回要回填给模型的 `role:'tool'` 消息。
+   *
+   * 结构约束：**每个 tool_call 都必须有一条对应回复**，否则服务端会 400；
+   * 超出预算（单轮 2 个 / 单次问答 6 个）的调用也要补一条说明。
+   */
+  private async executeToolCalls(
+    calls: ParsedToolCall[],
+    turns: MemoryTurn[],
+    state: ToolRunState,
+  ): Promise<AgentMessage[]> {
+    const messages: AgentMessage[] = [];
+
+    for (let index = 0; index < calls.length; index++) {
+      const call = calls[index];
+
+      if (index >= MAX_TOOL_CALLS_PER_ROUND) {
+        messages.push({
           role: "tool",
           tool_call_id: call.id,
-          content: `（单次最多检索 ${MAX_TOOL_CALLS} 个词条，本条已跳过）`,
+          content: `（单轮最多检索 ${MAX_TOOL_CALLS_PER_ROUND} 个词条，本条已跳过；需要更多资料请在下一轮继续）`,
         });
         continue;
       }
 
       const keyword = readKeyword(call);
       if (!keyword) {
-        toolMessages.push({
+        messages.push({
           role: "tool",
           tool_call_id: call.id,
-          content: "（未提供 keyword，本次未检索）",
+          content:
+            "（未提供 keyword，本次未检索；请只传游戏专有名词，如「电解器」）",
+        });
+        continue;
+      }
+
+      if (state.fetched >= MAX_PAGES_PER_QUESTION) {
+        messages.push({
+          role: "tool",
+          tool_call_id: call.id,
+          content: `（单次问答最多检索 ${MAX_PAGES_PER_QUESTION} 个词条，本条已跳过）`,
         });
         continue;
       }
 
       const page = await this.searchPage(keyword, turns);
       if (!page) {
-        toolMessages.push({
+        messages.push({
           role: "tool",
           tool_call_id: call.id,
           content: `未找到与「${keyword}」相关的 BWIKI 页面。`,
@@ -379,36 +481,55 @@ export class AiQueryCommands {
         continue;
       }
 
-      if (!pages.includes(page.title)) {
-        pages.push(page.title);
-        sources.push({ title: page.title, url: this.pageUrl(page.title) });
+      // 同一页面重复检索：不再重复灌一遍正文，省 token 也避免模型以为拿到了新资料
+      if (state.pages.includes(page.title)) {
+        if (page.reused) state.reusedPage = page.title;
+        messages.push({
+          role: "tool",
+          tool_call_id: call.id,
+          content: `页面「${page.title}」的正文已在上文提供，请直接使用上文资料。`,
+        });
+        continue;
       }
-      if (page.reused) reusedPage = page.title;
-      toolMessages.push({
+
+      state.fetched += 1;
+      state.pages.push(page.title);
+      state.sources.push({ title: page.title, url: this.pageUrl(page.title) });
+      if (page.reused) state.reusedPage = page.title;
+
+      messages.push({
         role: "tool",
         tool_call_id: call.id,
         content: `页面：${page.title}\n链接：${this.pageUrl(page.title)}\n---\n${page.text}`,
       });
     }
 
-    const finalMessages: AgentMessage[] = [
-      { role: "system", content: ANSWER_SYSTEM_PROMPT },
-      ...history,
-      { role: "user", content: question },
-      decision.message,
-      ...toolMessages,
-    ];
+    return messages;
+  }
 
-    // 带 tools + 'none'：结构合法且禁止再调工具
-    const final = await this.ai.complete(finalMessages, {
-      tools: [SEARCH_TOOL],
-      toolChoice: "none",
-    });
-    const answer = final.content || NO_ANSWER_TEXT;
+  /** 统一收尾日志与返回结构 */
+  private finalize(
+    question: string,
+    content: string,
+    state: ToolRunState,
+    grounded: boolean,
+  ): AgentAnswer {
+    const answer = content?.trim() || NO_ANSWER_TEXT;
+    if (!grounded) {
+      this.log.warn(
+        `[ai] 「${question}」没有产生检索调用，直接采用模型回答（可能不含资料支撑）`,
+      );
+    }
     this.log.info(
-      `[ai] 「${question}」→ 检索 ${pages.join("、") || "（无）"}${reusedPage ? `（沿用上一轮 ${reusedPage}）` : ""}，回答 ${answer.length} 字`,
+      `[ai] 「${question}」→ 检索 ${state.pages.join("、") || "（无）"}` +
+        `${state.reusedPage ? `（沿用上一轮 ${state.reusedPage}）` : ""}，回答 ${answer.length} 字`,
     );
-    return { answer, sources, pages, reusedPage };
+    return {
+      answer,
+      sources: state.sources,
+      pages: state.pages,
+      reusedPage: state.reusedPage,
+    };
   }
 
   /**

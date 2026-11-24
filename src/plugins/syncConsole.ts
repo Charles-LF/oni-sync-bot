@@ -2,16 +2,21 @@ import { Context } from "koishi";
 import { DataService } from "@koishijs/plugin-console";
 import {} from "@koishijs/plugin-console";
 import type { DeltaSyncConfig, NotifyConfig } from "../config";
-import type { SyncLogRow } from "./databaseExtension";
+import type {
+  SyncLogRow,
+  SyncRunItemRow,
+  SyncRunLogRow,
+  SyncRunRow,
+} from "./databaseExtension";
 import { PageSyncer } from "../sync/pageSync";
 import { ImageSyncer } from "../sync/imgSync";
 import { ModuleSyncer } from "../sync/moduleSync";
-import { runIncrementalSync } from "../sync/incrementalSync";
 import type { SyncLoopHooks, SyncLoopProgress } from "../sync/hooks";
 import { SyncNotifier } from "../services/syncNotifier";
 import { SyncRepository, SYNC_CONFIG_KEYS } from "../services/syncRepository";
 import type { SyncChangeListItem } from "../services/syncRepository";
 import {
+  SyncAbortedError,
   SyncTaskManager,
   type ControlResult,
   type ProgressReporter,
@@ -23,6 +28,21 @@ import {
 } from "../services/syncTaskManager";
 import type { SyncNotifyItem } from "../sync/pageSync";
 import { getErrorMessage, logger } from "../utils/tools";
+import { IncrementalSyncUseCase } from "../application/sync/incrementalSyncUseCase";
+import {
+  IgnoreListUseCase,
+  type IgnoreRuleRepositoryPort,
+} from "../application/sync/ignoreListUseCase";
+import type { StoredIgnoreRule } from "../domain/sync/ignoreRule";
+import { SyncIgnoreRepository } from "../infrastructure/persistence/syncIgnoreRepository";
+import {
+  SyncRunRepository,
+  type SyncRunState,
+} from "../infrastructure/persistence/syncRunRepository";
+import {
+  SyncRunRecorder,
+  type SyncLogEvent,
+} from "../infrastructure/console/syncRunRecorder";
 
 /** 控制台看到的完整状态 = 任务状态 + 水位 / 统计 */
 export interface SyncPanelStatus extends SyncPanelSnapshot {
@@ -32,6 +52,8 @@ export interface SyncPanelStatus extends SyncPanelSnapshot {
   lastSyncTime?: string;
   logCount: number;
   imageIndexCount: number;
+  /** 忽略规则条数 */
+  ignoreCount: number;
 }
 
 export interface SyncLogQueryPayload {
@@ -55,6 +77,35 @@ export interface SyncDetailPayload {
   id: string;
 }
 
+/** 点开任务卡片时：优先按 runId，其次取该任务最近一次运行 */
+export interface SyncTaskDetailPayload {
+  taskId?: SyncTaskId;
+  runId?: string;
+}
+
+/** 任务详情弹窗的数据 */
+export interface SyncTaskDetail {
+  run: SyncRunRow;
+  items: {
+    synced: SyncRunItemRow[];
+    skipped: SyncRunItemRow[];
+    failed: SyncRunItemRow[];
+  };
+  logs: SyncRunLogRow[];
+}
+
+export interface SyncIgnorePayload {
+  type: string;
+  name: string;
+  reason?: string;
+}
+
+export interface SyncIgnoreResult {
+  ok: boolean;
+  message: string;
+  rules: StoredIgnoreRule[];
+}
+
 declare module "koishi" {
   interface Context {
     /** 同步运维服务（见 plugins/syncConsole.ts） */
@@ -75,6 +126,15 @@ declare module "@koishijs/console" {
     "sync/logs"(payload?: SyncLogQueryPayload): Promise<SyncLogListPayload>;
     "sync/detail"(payload: SyncDetailPayload): Promise<SyncLogRow | null>;
     "sync/control"(payload: SyncControlPayload): Promise<ControlResult>;
+    /** 任务详情：本次运行的条目 + 完整日志 */
+    "sync/taskDetail"(
+      payload: SyncTaskDetailPayload,
+    ): Promise<SyncTaskDetail | null>;
+    "sync/ignore/list"(): Promise<StoredIgnoreRule[]>;
+    "sync/ignore/add"(payload: SyncIgnorePayload): Promise<SyncIgnoreResult>;
+    "sync/ignore/remove"(payload: SyncIgnorePayload): Promise<SyncIgnoreResult>;
+    /** 仅用于文档：服务端通过 broadcast 推送实时日志，前端用 ctx.on 订阅 */
+    "sync/log"(payload: SyncLogEvent): void;
   }
 }
 
@@ -120,7 +180,14 @@ class ConsoleSyncData extends DataService<SyncPanelStatus> {
   }
 }
 
-/** 同步运维面板：任务控制 + 最近更改 + 增量水位 */
+/**
+ * 同步运维面板：任务控制 + 最近更改 + 增量水位 + 忽略规则。
+ *
+ * 分层职责：
+ * - 本类属于接口层（适配 Koishi 控制台 / 命令），只做参数编排与事件注册；
+ * - 「是否跳过」的判定在领域层（`domain/sync`），调度与水位在应用层用例；
+ * - 执行器（`sync/*`）只搬数据，日志通过 `SyncRunRecorder` 落库并广播。
+ */
 export class SyncConsole {
   public static readonly inject = {
     database: { required: true },
@@ -131,11 +198,17 @@ export class SyncConsole {
 
   public readonly repo: SyncRepository;
   public readonly manager: SyncTaskManager;
+  public readonly ignoreRepo: SyncIgnoreRepository;
+  public readonly runRepo: SyncRunRepository;
+
+  private readonly ignoreUseCase: IgnoreListUseCase;
   private readonly notifyFn?: (items: SyncNotifyItem[]) => void;
   /** 增量同步的 cron：只来自配置，页面不可改 */
   private readonly deltaCron: string;
   private cronJobId = "";
   private statusCache: Partial<SyncPanelStatus> = {};
+  /** 各任务最近一次运行 id（内存缓存，重启后由数据库兜底） */
+  private readonly latestRunIds = new Map<SyncTaskId, string>();
 
   constructor(
     private readonly ctx: Context,
@@ -143,6 +216,11 @@ export class SyncConsole {
       Pick<NotifyConfig, "notifyGroupIds" | "notifyBotPlatform">,
   ) {
     this.repo = new SyncRepository(ctx);
+    this.ignoreRepo = new SyncIgnoreRepository(ctx);
+    this.runRepo = new SyncRunRepository(ctx);
+    this.ignoreUseCase = new IgnoreListUseCase(
+      this.ignoreRepo as IgnoreRuleRepositoryPort,
+    );
     this.deltaCron = config.syncCron || "15 * * * *";
 
     const notifier = new SyncNotifier(
@@ -162,9 +240,10 @@ export class SyncConsole {
     void this.initialize();
   }
 
-  /** 读库 → 注册增量 cron → 推送一次 */
+  /** 读库 → 收尾中断的运行记录 → 注册增量 cron → 推送一次 */
   private async initialize(): Promise<void> {
     await this.repo.loadConfig();
+    await this.runRepo.closeDanglingRuns();
     this.scheduleDeltaCron();
     await this.refreshStats();
     this.publish();
@@ -186,6 +265,7 @@ export class SyncConsole {
       lastSyncTime: lastSync ? new Date(lastSync).toISOString() : undefined,
       logCount: this.statusCache.logCount ?? 0,
       imageIndexCount: this.statusCache.imageIndexCount ?? 0,
+      ignoreCount: this.statusCache.ignoreCount ?? 0,
     };
 
     // 把每个任务上次的结果补回快照（来自数据库，重启后仍可见）
@@ -195,6 +275,7 @@ export class SyncConsole {
           `${SYNC_CONFIG_KEYS.lastResultPrefix}${task.id}`,
         ) || undefined;
       }
+      task.lastRunId = this.latestRunIds.get(task.id);
     }
 
     this.statusCache = { ...status };
@@ -210,6 +291,7 @@ export class SyncConsole {
       const page = await this.repo.listChanges({ limit: 1 });
       this.statusCache.logCount = page.totalAll;
       this.statusCache.imageIndexCount = await this.repo.countImages();
+      this.statusCache.ignoreCount = (await this.ignoreRepo.list()).length;
     } catch (error) {
       logger.debug(`刷新同步统计失败：${getErrorMessage(error)}`);
     }
@@ -279,42 +361,69 @@ export class SyncConsole {
   /** 增量同步：定时任务与 sync 命令共用 */
   async startDelta(trigger: string): Promise<ControlResult> {
     const ready = await this.ensureReady();
-    if (!ready.ok) return { ok: false, message: ready.message, status: this.status() };
+    if (!ready.ok) {
+      return { ok: false, message: ready.message, status: this.status() };
+    }
 
+    const ignoreRules = await this.ignoreRepo.loadRuleSet();
     const pageSyncer = new PageSyncer(
       this.ctx.wikiBot.getGGBot(),
       this.ctx.wikiBot.getBWikiBot(),
-      { database: this.ctx.database },
+      { database: this.ctx.database, ignoreRules },
     );
     const imageSyncer = new ImageSyncer(
       this.ctx.wikiBot.getGGBot(),
       this.ctx.wikiBot.getBWikiBot(),
+      { ignoreRules },
     );
 
-    const result = await this.manager.start("delta", trigger, async (token, report) => {
-      const summary = await runIncrementalSync(
-        {
-          source: this.ctx.wikiBot.getGGBot(),
-          target: this.ctx.wikiBot.getBWikiBot(),
-          pages: pageSyncer,
-          images: imageSyncer,
-          repo: this.repo,
-          notify: this.notifyFn,
-        },
-        token,
-        report,
-        {
-          maxLogRecords: this.config.syncLogLimit ?? 5000,
-          overlapMs: Math.max(0, this.config.syncOverlapSeconds ?? 10) * 1000,
-          fallbackHours: Math.max(1, this.config.syncFallbackHours ?? 24),
-          maxPagesPerRun: Math.max(1, this.config.syncMaxPagesPerRun ?? 300),
-          maxImagesPerRun: Math.max(1, this.config.syncMaxImagesPerRun ?? 100),
-          checkImages: this.config.syncCheckImages ?? true,
-        },
-      );
-      await this.finishRun("delta", summary.message);
-      return summary;
-    });
+    const result = await this.manager.start(
+      "delta",
+      trigger,
+      async (token, report) => {
+        const recorder = await this.beginRun("delta", trigger);
+        try {
+          const useCase = new IncrementalSyncUseCase(
+            {
+              source: this.ctx.wikiBot.getGGBot(),
+              target: this.ctx.wikiBot.getBWikiBot(),
+              pages: pageSyncer,
+              images: imageSyncer,
+              repo: this.repo,
+              notify: this.notifyFn,
+              reporter: recorder,
+            },
+            {
+              maxLogRecords: this.config.syncLogLimit ?? 5000,
+              overlapMs: Math.max(0, this.config.syncOverlapSeconds ?? 10) * 1000,
+              fallbackHours: Math.max(1, this.config.syncFallbackHours ?? 24),
+              maxPagesPerRun: Math.max(1, this.config.syncMaxPagesPerRun ?? 300),
+              maxImagesPerRun: Math.max(1, this.config.syncMaxImagesPerRun ?? 100),
+              checkImages: this.config.syncCheckImages ?? true,
+              ignoreRules,
+            },
+          );
+
+          const summary = await useCase.execute(token, report);
+          await this.finishRun("delta", summary.message);
+          await recorder.finish({
+            state: "completed",
+            message: summary.message,
+            total: summary.pages + summary.images,
+            synced: summary.synced,
+            skipped: summary.skipped,
+            failed: summary.failed,
+          });
+          return summary;
+        } catch (error) {
+          await recorder.finish({
+            state: runStateOf(error),
+            message: getErrorMessage(error),
+          });
+          throw error;
+        }
+      },
+    );
 
     return { ...result, status: this.status() };
   }
@@ -322,50 +431,73 @@ export class SyncConsole {
   /** 全量页面 / 图片 / 模块：可在面板上开始、暂停、停止 */
   private async startFullTask(taskId: SyncTaskId): Promise<ControlResult> {
     const ready = await this.ensureReady();
-    if (!ready.ok) return { ok: false, message: ready.message, status: this.status() };
+    if (!ready.ok) {
+      return { ok: false, message: ready.message, status: this.status() };
+    }
 
-    const { gg, bwiki } = {
-      gg: this.ctx.wikiBot.getGGBot(),
-      bwiki: this.ctx.wikiBot.getBWikiBot(),
-    };
+    const gg = this.ctx.wikiBot.getGGBot();
+    const bwiki = this.ctx.wikiBot.getBWikiBot();
+    const ignoreRules = await this.ignoreRepo.loadRuleSet();
 
     const result = await this.manager.start(
       taskId,
       "console",
       async (token, report) => {
-        const hooks = this.createHooks(token, report, taskId);
-        let summary: SyncRunSummary;
+        const recorder = await this.beginRun(taskId, "console");
+        const hooks = this.createHooks(token, report, taskId, recorder);
 
-        if (taskId === "pages") {
-          const stats = await new PageSyncer(gg, bwiki, {
-            database: this.ctx.database,
-          }).syncAll(hooks);
-          summary = {
-            synced: stats.synced,
-            skipped: stats.skipped,
-            failed: stats.failed,
-            message: `页面 ${stats.total} 个：同步 ${stats.synced}、跳过 ${stats.skipped}、失败 ${stats.failed}`,
-          };
-        } else if (taskId === "images") {
-          const stats = await new ImageSyncer(gg, bwiki).syncAll(hooks);
-          summary = {
-            synced: stats.synced,
-            skipped: stats.skipped,
-            failed: stats.failed,
-            message: `图片 ${stats.total} 张：转存 ${stats.synced}、跳过 ${stats.skipped}、失败 ${stats.failed}`,
-          };
-        } else {
-          const stats = await new ModuleSyncer(gg, bwiki).syncAll(hooks);
-          summary = {
-            synced: stats.synced,
-            skipped: stats.skipped,
-            failed: stats.failed,
-            message: `模块 ${stats.total} 个：同步 ${stats.synced}、跳过 ${stats.skipped}、失败 ${stats.failed}`,
-          };
+        try {
+          let summary: SyncRunSummary;
+
+          if (taskId === "pages") {
+            const stats = await new PageSyncer(gg, bwiki, {
+              database: this.ctx.database,
+              ignoreRules,
+            }).syncAll(hooks);
+            summary = {
+              synced: stats.synced,
+              skipped: stats.skipped,
+              failed: stats.failed,
+              message: `页面 ${stats.total} 个：同步 ${stats.synced}、跳过 ${stats.skipped}、失败 ${stats.failed}`,
+            };
+          } else if (taskId === "images") {
+            const stats = await new ImageSyncer(gg, bwiki, {
+              ignoreRules,
+            }).syncAll(hooks);
+            summary = {
+              synced: stats.synced,
+              skipped: stats.skipped,
+              failed: stats.failed,
+              message: `图片 ${stats.total} 张：转存 ${stats.synced}、跳过 ${stats.skipped}、失败 ${stats.failed}`,
+            };
+          } else {
+            const stats = await new ModuleSyncer(gg, bwiki, {
+              ignoreRules,
+            }).syncAll(hooks);
+            summary = {
+              synced: stats.synced,
+              skipped: stats.skipped,
+              failed: stats.failed,
+              message: `模块 ${stats.total} 个：同步 ${stats.synced}、跳过 ${stats.skipped}、失败 ${stats.failed}`,
+            };
+          }
+
+          await this.finishRun(taskId, summary.message);
+          await recorder.finish({
+            state: "completed",
+            message: summary.message,
+            synced: summary.synced,
+            skipped: summary.skipped,
+            failed: summary.failed,
+          });
+          return summary;
+        } catch (error) {
+          await recorder.finish({
+            state: runStateOf(error),
+            message: getErrorMessage(error),
+          });
+          throw error;
         }
-
-        await this.finishRun(taskId, summary.message);
-        return summary;
       },
       true,
     );
@@ -378,6 +510,7 @@ export class SyncConsole {
     token: RunToken,
     report: ProgressReporter,
     taskId: SyncTaskId,
+    recorder?: SyncRunRecorder,
   ): SyncLoopHooks {
     const phaseByTask: Record<SyncTaskId, string> = {
       delta: "增量同步",
@@ -399,6 +532,66 @@ export class SyncConsole {
           message: info.title ? `正在处理 ${info.title}` : "准备中…",
         });
       },
+      log: (level, message) => recorder?.log(level, message),
+      item: (item) => recorder?.item(item),
+    };
+  }
+
+  // ------------------------------------------------------------ 运行记录
+
+  /** 开一次运行记录；数据库异常时降级为「只广播不落库」 */
+  private async beginRun(
+    taskId: SyncTaskId,
+    trigger: string,
+  ): Promise<SyncRunRecorder> {
+    let runId = "";
+    try {
+      runId = await this.runRepo.begin(taskId, trigger);
+    } catch (error) {
+      logger.warn(`创建运行记录失败，本次仅广播日志：${getErrorMessage(error)}`);
+      runId = SyncRunRepository.createId(taskId);
+    }
+    this.latestRunIds.set(taskId, runId);
+
+    return new SyncRunRecorder(this.ctx, this.runRepo, runId, taskId, {
+      logLimit: this.config.syncTaskLogLimit ?? 500,
+      runKeep: this.config.syncRunKeep ?? 20,
+      broadcast: (event) => this.broadcastLog(event),
+    });
+  }
+
+  /** 实时日志：网页端订阅 `sync/log`，无需等落库 */
+  private broadcastLog(event: SyncLogEvent): void {
+    try {
+      void this.ctx.get("console")?.broadcast("sync/log", event, {
+        authority: 0,
+      });
+    } catch (error) {
+      logger.debug(`广播同步日志失败：${getErrorMessage(error)}`);
+    }
+  }
+
+  private async taskDetail(
+    payload: SyncTaskDetailPayload = {},
+  ): Promise<SyncTaskDetail | null> {
+    const run = payload.runId
+      ? await this.runRepo.getRun(payload.runId)
+      : await this.runRepo.latestRun(payload.taskId);
+    if (!run) return null;
+
+    const [items, logs] = await Promise.all([
+      this.runRepo.listItems(run.id),
+      this.runRepo.listLogs(run.id),
+    ]);
+
+    return {
+      run,
+      items: {
+        synced: items.filter((item) => item.action === "synced"),
+        skipped: items.filter((item) => item.action === "skipped"),
+        failed: items.filter((item) => item.action === "failed"),
+      },
+      logs,
     };
   }
 
@@ -422,6 +615,48 @@ export class SyncConsole {
       ok: false,
       message: `Wiki 机器人未就绪（WIKIGG ${ready.gg ? "✅" : "❌"} / bwiki ${ready.bwiki ? "✅" : "❌"}）`,
     };
+  }
+
+  // -------------------------------------------------------------- 忽略规则
+
+  async listIgnoreRules(): Promise<StoredIgnoreRule[]> {
+    return this.ignoreUseCase.list();
+  }
+
+  async addIgnoreRule(payload: SyncIgnorePayload): Promise<SyncIgnoreResult> {
+    try {
+      const rule = await this.ignoreUseCase.add(payload);
+      this.statusCache.ignoreCount = (await this.ignoreUseCase.list()).length;
+      this.publish();
+      return {
+        ok: true,
+        message: `已添加忽略规则：${rule.type}/${rule.name}`,
+        rules: await this.ignoreUseCase.list(),
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        message: getErrorMessage(error),
+        rules: await this.ignoreUseCase.list().catch(() => []),
+      };
+    }
+  }
+
+  async removeIgnoreRule(
+    payload: SyncIgnorePayload,
+  ): Promise<SyncIgnoreResult> {
+    try {
+      const message = await this.ignoreUseCase.remove(payload);
+      this.statusCache.ignoreCount = (await this.ignoreUseCase.list()).length;
+      this.publish();
+      return { ok: true, message, rules: await this.ignoreUseCase.list() };
+    } catch (error) {
+      return {
+        ok: false,
+        message: getErrorMessage(error),
+        rules: await this.ignoreUseCase.list().catch(() => []),
+      };
+    }
   }
 
   // -------------------------------------------------------------- 最近更改
@@ -472,9 +707,38 @@ export class SyncConsole {
     ctx.console.addListener("sync/detail", (payload) => this.detail(payload.id), {
       authority: 0,
     });
+    ctx.console.addListener(
+      "sync/taskDetail",
+      (payload) => this.taskDetail(payload),
+      { authority: 0 },
+    );
+    ctx.console.addListener("sync/ignore/list", () => this.listIgnoreRules(), {
+      authority: 0,
+    });
     // 会改动远端 wiki，按写操作对待；全量同步权重最高（4）
     ctx.console.addListener("sync/control", (payload) => this.control(payload), {
       authority: 4,
     });
+    ctx.console.addListener(
+      "sync/ignore/add",
+      (payload) => this.addIgnoreRule(payload),
+      { authority: 4 },
+    );
+    ctx.console.addListener(
+      "sync/ignore/remove",
+      (payload) => this.removeIgnoreRule(payload),
+      { authority: 4 },
+    );
   }
+}
+
+/** 主动停止与真异常要分开记，详情里才能一眼看出是人为中断还是报错 */
+function runStateOf(error: unknown): Exclude<SyncRunState, "running"> {
+  if (
+    error instanceof SyncAbortedError ||
+    (error as { name?: string } | null)?.name === "SyncAbortedError"
+  ) {
+    return "stopped";
+  }
+  return "failed";
 }

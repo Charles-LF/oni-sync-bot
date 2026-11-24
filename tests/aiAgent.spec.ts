@@ -67,7 +67,8 @@ function createPlugin(options: Options) {
   plugin.log = { info() {}, warn() {}, debug() {}, error() {} };
   plugin.ai = {
     complete: async (messages: AgentMessage[], opts: any = {}) => {
-      completeCalls.push({ messages, opts });
+      // 快照当前消息：多轮循环会继续往同一个数组里追加，直接存引用会让断言看到后续轮次
+      completeCalls.push({ messages: [...messages], opts });
       const next = options.decisions.shift();
       if (!next) throw new Error("模型调用次数超出预期");
       return next;
@@ -128,8 +129,10 @@ describe("plugins/aiQueryCommands Agent 调度", () => {
     assert.equal(tools.length, 1);
     assert.equal(tools[0].tool_call_id, "call_1");
     assert.ok(tools[0].content.includes("电力：消耗 120 瓦"));
-    // 第 2 轮必须禁止再次调工具，否则模型可能无限检索
-    assert.deepEqual(completeCalls[1].opts.toolChoice, "none");
+    // 第 2 轮仍是 auto：模型可以继续检索（多轮工具调用），也可以直接收尾
+    assert.deepEqual(completeCalls[1].opts.toolChoice, "auto");
+    // 本轮返回文本 → 循环结束，不再多调一次模型
+    assert.equal(completeCalls.length, 2);
   });
 
   it("两个 tool_call（比较类问题）必须各回一条 tool 消息", async () => {
@@ -178,6 +181,87 @@ describe("plugins/aiQueryCommands Agent 调度", () => {
     assert.equal(tools[2].tool_call_id, "c3");
     assert.ok(tools[2].content.includes("已跳过"));
     assert.deepEqual(fetched, ["电解器", "气泵"], "第三个不应真的去抓");
+  });
+
+  it("多轮工具调用：先查电解器、再查复制人，最后直接出文本", async () => {
+    const { plugin, completeCalls, fetched } = createPlugin({
+      decisions: [
+        plan([toolCall("c1", "电解器")]),
+        plan([toolCall("c2", "复制人")]),
+        final("按资料推算：满载电解器可供 8 个复制人。"),
+      ],
+      pages: { 电解器: "产氧 888 克/秒", 复制人: "耗氧 100 克/秒" },
+      pageList: ["电解器", "复制人"],
+    });
+
+    const result = await plugin.runAgent("满载电解器能供几个复制人", []);
+
+    assert.deepEqual(fetched, ["电解器", "复制人"]);
+    assert.deepEqual(result!.pages, ["电解器", "复制人"]);
+    assert.equal(result!.sources.length, 2);
+    assert.deepEqual(
+      completeCalls.map((call) => call.opts.toolChoice),
+      ["auto", "auto", "auto"],
+      "每一轮都允许模型继续检索，直到它自己给出文本",
+    );
+
+    const lastMessages = completeCalls[2].messages;
+    assert.deepEqual(
+      toolMessages(lastMessages).map((message) => message.tool_call_id),
+      ["c1", "c2"],
+      "两轮检索的资料都必须留在上下文里",
+    );
+    assert.ok(
+      toolMessages(lastMessages).some((message) =>
+        message.content.includes("产氧 888 克/秒"),
+      ),
+    );
+  });
+
+  it("达到最大轮数时强制收尾（tool_choice:none）并追加收尾提示", async () => {
+    const { plugin, completeCalls } = createPlugin({
+      decisions: [
+        plan([toolCall("c1", "电解器")]),
+        final("按资料推算：可供 8 个复制人。"),
+      ],
+      pages: { 电解器: "产氧 888 克/秒" },
+      pageList: ["电解器"],
+    });
+    plugin.config.aiMaxToolRounds = 2;
+
+    const result = await plugin.runAgent("满载电解器能供几个复制人", []);
+
+    assert.equal(result!.answer, "按资料推算：可供 8 个复制人。");
+    assert.deepEqual(
+      completeCalls.map((call) => call.opts.toolChoice),
+      ["auto", "none"],
+      "最后一轮禁止再调工具，防止死循环",
+    );
+    assert.ok(
+      completeCalls[1].messages.some(
+        (message) =>
+          message.role === "system" && message.content.includes("检索轮数已达上限"),
+      ),
+      "收尾轮必须带上「用已有资料作答」的提示",
+    );
+  });
+
+  it("重复检索同一页面时不再重复灌正文，也不重复记来源", async () => {
+    const { plugin, completeCalls } = createPlugin({
+      decisions: [
+        plan([toolCall("c1", "电解器")]),
+        plan([toolCall("c2", "电解器")]),
+        final("耗电 120 瓦。"),
+      ],
+      pages: { 电解器: "电解器正文" },
+      pageList: ["电解器"],
+    });
+
+    const result = await plugin.runAgent("电解器耗电多少", []);
+
+    assert.equal(result!.sources.length, 1, "同一页面只记一个来源");
+    const lastTool = toolMessages(completeCalls[2].messages).at(-1)!;
+    assert.ok(lastTool.content.includes("已在上文提供"));
   });
 
   it("页面不存在时回「未找到」，不写来源也不写记忆页", async () => {

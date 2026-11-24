@@ -5,7 +5,7 @@ import { Mwn } from "mwn";
 import { PageSyncer } from "../sync/pageSync";
 import { ModuleSyncer } from "../sync/moduleSync";
 import { ImageSyncer } from "../sync/imgSync";
-import { logger, formatWikiTime } from "../utils/tools";
+import { logger, formatWikiTime, getErrorMessage } from "../utils/tools";
 
 /**
  * 实际只消费日志地址与通知字段；
@@ -32,10 +32,12 @@ export class SyncCommands {
     this.registerCommands(ctx);
   }
 
-  /** 统一的 PageSyncer 构造：数据库在这里装配 */
-  private createPageSyncer(ctx: Context): PageSyncer {
+  /** 统一的 PageSyncer 构造：数据库与忽略规则在这里装配 */
+  private async createPageSyncer(ctx: Context): Promise<PageSyncer> {
+    const ignoreRules = await ctx.syncConsole.ignoreRepo.loadRuleSet();
     return new PageSyncer(ctx.wikiBot.getGGBot(), ctx.wikiBot.getBWikiBot(), {
       database: ctx.database,
+      ignoreRules,
     });
   }
 
@@ -87,7 +89,7 @@ export class SyncCommands {
           return "❌ Wiki 机器人未就绪，请检查登录配置或查看日志";
         }
         try {
-          await this.createPageSyncer(ctx).syncOne(pageTitle, "sync-bot");
+          await (await this.createPageSyncer(ctx)).syncOne(pageTitle, "sync-bot");
           return `✅ 已尝试同步页面：${pageTitle}`;
         } catch (err) {
           logger.error(`同步页面 ${pageTitle} 失败，错误信息：${err}`);
@@ -146,7 +148,7 @@ export class SyncCommands {
           return "❌ Wiki 机器人未就绪，请检查登录配置或查看日志";
         }
         try {
-          await this.createPageSyncer(ctx).syncAll();
+          await (await this.createPageSyncer(ctx)).syncAll();
           return `✅ 已尝试同步所有页面，详见控制台「同步运维」`;
         } catch (err) {
           logger.error(`同步所有页面失败，错误信息：${err}`);
@@ -242,6 +244,75 @@ export class SyncCommands {
       .command("sync.allcontributors", "同步所有页面的贡献者", { authority: 4 })
       .action(async ({ session }) => {
         return this.syncAllContributors(ctx, "手动命令");
+      });
+
+    this.registerIgnoreCommands(ctx);
+  }
+
+  /**
+   * 忽略列表维护命令（仅管理员）。
+   * 与背景管理用的 `sync_ignore` 表共用同一套用例，命令与控制台 API 行为一致。
+   */
+  private registerIgnoreCommands(ctx: Context): void {
+    ctx
+      .command(
+        "sync.ignore.add <type:string> <name:string> [reason:text]",
+        "添加忽略规则：不再同步指定的页面 / 图片 / 模块",
+        { authority: 4 },
+      )
+      .alias("忽略添加")
+      .action(async (_argv, type, name, reason) => {
+        if (!type || !name) {
+          return "📖 用法：sync.ignore.add <page|image|module> <名称> [原因]";
+        }
+        const result = await ctx.syncConsole.addIgnoreRule({
+          type,
+          name,
+          reason,
+        });
+        return result.ok ? `✅ ${result.message}` : `❌ ${result.message}`;
+      });
+
+    ctx
+      .command(
+        "sync.ignore.remove <type:string> <name:string>",
+        "移除忽略规则",
+        { authority: 4 },
+      )
+      .alias("忽略移除")
+      .action(async (_argv, type, name) => {
+        if (!type || !name) {
+          return "📖 用法：sync.ignore.remove <page|image|module> <名称>";
+        }
+        const result = await ctx.syncConsole.removeIgnoreRule({ type, name });
+        return result.ok ? `✅ ${result.message}` : `❌ ${result.message}`;
+      });
+
+    ctx
+      .command("sync.ignore.list [type:string]", "查看忽略规则", {
+        authority: 4,
+      })
+      .alias("忽略列表")
+      .action(async (_argv, type) => {
+        try {
+          const rules = await ctx.syncConsole.listIgnoreRules();
+          const filtered = type
+            ? rules.filter((rule) => rule.type === type.trim().toLowerCase())
+            : rules;
+          if (filtered.length === 0) {
+            return type
+              ? `📭 没有 ${type} 类型的忽略规则`
+              : "📭 忽略列表为空";
+          }
+          const lines = filtered.map(
+            (rule) =>
+              `• [${rule.type}] ${rule.name}` +
+              (rule.reason ? ` —— ${rule.reason}` : ""),
+          );
+          return [`📋 忽略规则（${filtered.length} 条）`, ...lines].join("\n");
+        } catch (error) {
+          return `❌ 读取忽略规则失败：${getErrorMessage(error)}`;
+        }
       });
   }
 

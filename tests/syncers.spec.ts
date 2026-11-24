@@ -3,6 +3,7 @@ import type { Mwn } from "mwn";
 import { ModuleSyncer } from "../src/sync/moduleSync";
 import { PageSyncer } from "../src/sync/pageSync";
 import { ImageSyncer } from "../src/sync/imgSync";
+import { IgnoreRuleSet } from "../src/domain/sync/ignoreRule";
 
 /**
  * 这些测试针对 P3 引入的**依赖注入**本身：
@@ -15,7 +16,9 @@ describe("sync 模块的依赖注入", () => {
     it("默认忽略列表包含「教程」", async () => {
       const syncer = new PageSyncer(fakeBot, fakeBot);
       const result = await syncer.syncOne("教程", "tester");
-      assert.deepEqual(result, { success: true, reason: "ignored" });
+      assert.equal(result.success, true);
+      assert.equal(result.reason, "ignored");
+      assert.ok(result.detail?.includes("内置忽略名单"));
     });
 
     it("注入的 options 会覆盖默认忽略列表", async () => {
@@ -110,7 +113,8 @@ describe("sync 模块的依赖注入", () => {
         options: { ignoredModules: ["Mod:Anything"] },
       });
       const result = await syncer.syncOne("Mod:Anything");
-      assert.deepEqual(result, { success: true, reason: "ignored" });
+      assert.equal(result.success, true);
+      assert.equal(result.reason, "ignored");
     });
   });
 
@@ -126,7 +130,33 @@ describe("sync 模块的依赖注入", () => {
         options: { ignoredImages: ["Foo.png"] },
       });
       const result = await syncer.syncOne("Foo.png");
-      assert.deepEqual(result, { success: true, reason: "ignored" });
+      assert.equal(result.success, true);
+      assert.equal(result.reason, "ignored");
+    });
+
+    it("数据库驱动的规则可命中图片（含 File: 前缀归一化）", async () => {
+      const syncer = new ImageSyncer(fakeBot, fakeBot, {
+        ignoreRules: new IgnoreRuleSet([
+          { type: "image", name: "File:Foo.png", reason: "占位图" },
+        ]),
+      });
+      const result = await syncer.syncOne("Foo.png");
+      assert.equal(result.reason, "ignored");
+      assert.ok(result.detail?.includes("占位图"));
+    });
+  });
+
+  describe("PageSyncer 的数据库忽略规则", () => {
+    it("通配规则命中时不发起任何请求", async () => {
+      const syncer = new PageSyncer(fakeBot, fakeBot, {
+        ignoreRules: new IgnoreRuleSet([
+          { type: "page", name: "教程*", reason: "长期不同步" },
+        ]),
+      });
+      const result = await syncer.syncOne("教程/电力", "tester");
+      assert.equal(result.success, true);
+      assert.equal(result.reason, "ignored");
+      assert.ok(result.detail?.includes("教程*"));
     });
   });
 });

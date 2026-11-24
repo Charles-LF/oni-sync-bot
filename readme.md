@@ -30,6 +30,9 @@
   绝不会打断进行中的 mwn 请求，也不会把任务卡死
 - **单任务并发 + 优先级让路** — 同一时刻只跑一个；增量优先，启动别的任务会让正在跑的全量任务自动暂停
 - **实时进度** — 阶段、进度条、同步 / 跳过 / 失败计数、当前处理条目
+- **任务详情抽屉** — 点任务卡片查看本次运行：成功 / 跳过 / 失败条目（含具体原因）+ 完整日志流，
+  运行中日志通过 `sync/log` 广播**实时滚动**，落库后仍可回看（默认每次保留 500 条、最近 20 次运行）
+- **忽略规则页** — 直接在页面上增删「页面 / 图片 / 模块」级别的跳过规则，改动即时生效
 - **最近更改只读** — 落库的 `recentchanges` 列表（默认保留 5000 条），可检索、分页、点开看 unified diff；
   页面上没有清空入口，清理只由条数上限自动完成
 
@@ -43,15 +46,17 @@
 ### 🤖 AI 问答（Function Calling + mwn 实时取正文）
 
 - **Function Calling** — DeepSeek 拿到 `search_oni_bwiki(keyword)` 工具后**自己决定查什么**，
-  不再依赖本地语义检索；常规两轮模型调用
+  并支持**多轮调用**：先查「电解器」、再查「复制人」，拿到数据后自行计算（默认最多 5 轮，`aiMaxToolRounds`）
 - **复用已有 mwn 实例取正文** — `WikiBotService.fetchPagePlainText()` 走 `action=parse&prop=text`，
   拿的是**模板/模块展开后**的 HTML，登录态失效会自动重登重放
 - **cheerio 清洗保留信息框** — 信息框（右侧关键数值）抽成 `电力：消耗 120 瓦` 这样的「标签：值」行，
   正文数表压平为 `单元格 | 单元格`，只丢导航框 / 目录 / 脚本 / 脚注标记
 - **关键词三级解析** — `wikipages` 精确标题 → 拼音/首字母模糊匹配 → BWiki 全文检索，
   最后才把关键词原样当标题试一次
-- **防幻觉** — 第 2 轮把正文以 `role:'tool'` 回填，提示词要求「严格且仅根据资料回答」
-- **强制检索** — 模型试图凭记忆作答时，程序会用 `tool_choice` 逼它再检索一次
+- **防幻觉** — 工具结果以 `role:'tool'` 回填；提示词要求「只能用资料里的数值」，
+  但**允许**基于这些数值做计算推导（如 产氧量 ÷ 每人耗氧量），并写明算式与假设
+- **强制检索** — 模型试图凭记忆作答时，程序会用 `tool_choice:'required'` 逼它再检索一次
+- **兜底收尾** — 达到最大轮数时追加「停止检索、用已有资料作答」的提示并强制 `tool_choice:'none'`，不会死循环
 - **追问** — 自己最近 2 轮问答会被带进上下文；开启 `aiChannelMemory` 时，群里刚聊过的词条也能被「耗电多少」这类**没有主语的追问**引用。
   **多人群聊不会串台**：问题里带新词条就零历史、独立检索（详见下方「群内承接」表格）
 - **长回答折叠** — QQ 下回答超过 `aiCodeBlockMinChars`（默认 180 字）时整段塞进代码块，
@@ -121,6 +126,8 @@ npm uninstall vectra @huggingface/transformers   # 0.12.0 起不再需要
 | `syncMaxImagesPerRun` | 增量同步 | 单轮最多同步的图片数                                    | `100`                          |
 | `syncOverlapSeconds`  | 增量同步 | 拉取起始时间向前偏移的秒数（抵消 MediaWiki 写入延迟）   | `10`                           |
 | `syncFallbackHours`   | 增量同步 | 首次运行（尚无水位）时向前回溯的小时数                  | `24`                           |
+| `syncTaskLogLimit`    | 增量同步 | 任务详情每次运行保留的日志条数（超出裁掉最早的）        | `500`                          |
+| `syncRunKeep`         | 增量同步 | 任务详情保留最近多少次运行（含条目与日志）              | `20`                           |
 
 ### 🤖 AI 相关配置
 
@@ -141,6 +148,7 @@ npm uninstall vectra @huggingface/transformers   # 0.12.0 起不再需要
 | `aiMemoryTtl`         | AI   | 追问记忆过期时间（秒），超时视为新话题                        | `600`                      |
 | `aiChannelMemory`     | AI   | 群内话题承接：别人刚问过，自己接着问也能懂「那它…」            | `true`                     |
 | `aiCodeBlockMinChars` | AI   | QQ 下回答超过这么多字就塞进代码块（`0` = 始终不用）            | `180`                      |
+| `aiMaxToolRounds`     | AI   | 复合问题允许的最大工具调用轮数（超出强制收尾）                | `5`                        |
 
 > **已删除的配置（0.12.5 起 schema 中不再存在）**：
 > `textSyncOnChange`、`textApiUrl`、`textTableMode`、`textMaxLength`、`textSyncInterval`，
@@ -245,9 +253,23 @@ npm uninstall vectra @huggingface/transformers   # 0.12.0 起不再需要
 | `sync.allimgs`              | -          | 同步所有图片         | 4    |
 | `sync.contributor <title>`  | -          | 同步指定页面的贡献者 | 4    |
 | `sync.allcontributors`      | -          | 同步所有页面的贡献者 | 4    |
+| `sync.ignore.add <type> <name> [reason]` | `忽略添加` | 添加忽略规则（`page` / `image` / `module`，名称支持 `*`） | 4 |
+| `sync.ignore.remove <type> <name>` | `忽略移除` | 移除忽略规则 | 4 |
+| `sync.ignore.list [type]`   | `忽略列表` | 查看忽略规则 | 4 |
 
 > 增量同步是安全、幂等的低风险操作，权限只要 **1**；
 > 全量 / 单页同步会大量写入 bwiki，统一收紧到 **4**。
+
+#### 忽略规则（数据库驱动）
+
+跳过名单不再写死在代码里：`sync_ignore` 表 + 控制台「忽略规则」页 + 上面三条命令共用同一个用例
+（`application/sync/ignoreListUseCase.ts`）。
+
+- 名称归一化：忽略大小写、首尾空白、`_` 视作空格；图片去掉 `File:` / `文件:` 前缀，模块去掉 `Module:` 前缀
+- 支持 `*` 通配，例如 `File:Icon_*`、`教程*`
+- 三种类型分别匹配：`page` 不影响 `image`，反之亦然
+- 命中后条目记为「跳过」，原因写进任务详情；内置名单（`教程` / `首页` 等）仍然兜底
+- 规则在**每次任务开始前**加载一次，循环里只做内存匹配
 
 #### 增量同步是怎么跑的
 
@@ -331,8 +353,14 @@ npm uninstall vectra @huggingface/transformers   # 0.12.0 起不再需要
 | `sync_logs` | `id`（主键 = rcid）、`title`、`user`、`timestamp`（ISO）、`comment`、`sizeDiff`、`diffHtml`、`revid`、`parentid`、`ns` |
 | `sync_config` | `key`（主键）、`value` —— 存 `last_sync_time` / `last_result:<任务>`                                            |
 | `sync_images` | `title`（主键）、`timestamp`、`sha1`、`synced_at` —— 图片增量比对用的指纹                                     |
+| `sync_ignore` | `id`（自增主键）、`type`（page/image/module）、`name`、`normalized`（归一化后的查重列）、`reason`、`createdAt` |
+| `sync_runs` | `id`（主键）、`taskId`、`trigger`、`state`、`startedAt`、`finishedAt`、`message`、`total`/`synced`/`skipped`/`failed` |
+| `sync_run_items` | `id`（`runId#seq`）、`runId`、`title`、`action`（synced/skipped/failed）、`reason`、`at`                   |
+| `sync_run_logs` | `id`（`runId#seq`）、`runId`、`level`（info/warn/error）、`message`、`at`                                   |
 
 `wikipages` / `oniaimemory` / `sync_*` 通过 `Tables` 接口增强声明（见 `databaseExtension.ts`）。
+`sync_runs` / `sync_run_items` / `sync_run_logs` 是任务详情抽屉的数据源，
+`syncRunKeep` 控制保留多少次运行、`syncTaskLogLimit` 控制每次运行保留的日志条数。
 
 > 0.12.0 起不再维护 `wikitexts` 表（渲染文本改为按需抓取），0.12.5 起连表声明也移除了。
 > 0.14.0 起不再有 `onitodos` 表（TodoList 功能已移除）。
@@ -358,11 +386,17 @@ npm uninstall vectra @huggingface/transformers   # 0.12.0 起不再需要
 | `sync/status`  | 0    | 四个任务的状态 / 进度 + 下次增量 + 水位 + 统计     |
 | `sync/logs`    | 0    | 分页 / 关键词查询最近更改                          |
 | `sync/detail`  | 0    | 单条详情，`diffHtml` 为空时实时抓取并缓存          |
+| `sync/taskDetail` | 0 | 一次运行的条目（成功 / 跳过 / 失败）与完整日志     |
+| `sync/ignore/list` | 0 | 忽略规则列表                                   |
+| `sync/ignore/add` | 4 | 添加忽略规则                                     |
+| `sync/ignore/remove` | 4 | 移除忽略规则                                  |
 | `sync/control` | 4    | `{ taskId, action }`，`start` / `pause` / `resume` / `stop` |
+| `sync/log`（广播） | 0 | 运行中的实时日志，前端用 `ctx.on("sync/log")` 订阅 |
 
 - **没有 `update-cron`**：增量同步的表达式只来自配置，页面只展示
 - **没有清空接口**：最近更改只能查，旧记录由 `syncLogLimit` 自动裁剪
 - 状态推走 DataService `onisync`（轻量快照，进度 400ms 节流），列表按需 `send` 拉取
+- 任务日志走 `SyncRunRecorder`：先入内存缓冲、每 400ms 合并落库，同时 `broadcast` 给网页
 - diff 用 `difftype=unified` 拉取后在客户端按行着色（`+` 绿 / `-` 红 / `@@` 紫），
   比整表 HTML 小一个数量级，也不会出现左右两栏重复显示的问题
 
@@ -373,28 +407,44 @@ npm uninstall vectra @huggingface/transformers   # 0.12.0 起不再需要
 src/
 ├── index.ts                  # 组合根：SUB_PLUGINS 注册表 + 控制台入口
 ├── config.ts                 # 配置的唯一声明处（账号 / 站点 / 通知 / 定时 / AI）
+├── domain/                   # 领域层：纯 TS，不依赖 Koishi / mwn / 数据库
+│   └── sync/
+│       ├── ignoreRule.ts     # 忽略规则值对象 + 归一化 + 通配匹配
+│       ├── decision.ts       # 同步三态判定（synced / skipped / failed）与是否跳过
+│       └── ports.ts          # SyncReporter 端口 + reportSyncItem
+├── application/              # 应用层：用例编排
+│   └── sync/
+│       ├── incrementalSyncUseCase.ts  # 增量同步用例（水位 / 拉变更 / 同步页面与图片）
+│       └── ignoreListUseCase.ts       # 忽略列表增删查（校验 / 归一化 / 查重）
+├── infrastructure/           # 基础设施层：仓储与外部输出
+│   ├── persistence/
+│   │   ├── syncIgnoreRepository.ts    # sync_ignore 读写
+│   │   └── syncRunRepository.ts       # sync_runs / items / logs 读写与裁剪
+│   └── console/
+│       └── syncRunRecorder.ts         # 日志缓冲落库 + sync/log 广播
 ├── services/
 │   ├── wikiBotService.ts     # wikiBot 服务：登录、代理、透明重登录、fetchPagePlainText
 │   ├── cronScheduler.ts      # 内置 cron 调度器（ctx.oniCron）
-│   ├── aiService.ts          # DeepSeek 客户端（Function Calling）+ 两套提示词
+│   ├── aiService.ts          # DeepSeek 客户端（Function Calling）+ 提示词
 │   ├── aiMemory.ts           # 追问记忆（用户 / 群话题）与上下文选择
 │   ├── messageRenderer.ts    # QQ markdown+按钮 / 纯文本 的渲染
 │   ├── syncRepository.ts     # 水位 / 最近更改 / 图片指纹的持久化
 │   └── syncTaskManager.ts    # 多任务状态机 + 协作式取消令牌（pausable / stoppable）
-├── plugins/
+├── plugins/                  # 接口层：Koishi 命令与控制台 API
 │   ├── cronService.ts        # 挂载 ctx.oniCron
 │   ├── databaseExtension.ts  # wikipages / oniaimemory / sync_* 表定义
-│   ├── syncConsole.ts        # 同步运维面板：任务控制 / 最近更改（ctx.syncConsole）
+│   ├── syncConsole.ts        # 同步运维面板：任务控制 / 最近更改 / 忽略规则
 │   ├── queryCommands.ts      # x / 查wiki
-│   ├── aiQueryCommands.ts    # ai / ai.status（Agent 调度）
+│   ├── aiQueryCommands.ts    # ai / ai.status（Agent 多轮调度）
 │   ├── syncCommands.ts       # sync.* 命令 + 贡献者定时任务
 │   ├── updateCommands.ts     # update.* / redirect / relogin
 │   └── routeRedirect.ts      # 短链路由
-├── sync/
-│   ├── pageSync.ts           # PageSyncer：单页 / 全量（原子能力，不含调度）
-│   ├── incrementalSync.ts    # 增量引擎：recentchanges + 图片指纹 + 水位推进
+├── sync/                     # 纯执行器：只搬数据，不判断业务
+│   ├── pageSync.ts           # PageSyncer：单页 / 全量
+│   ├── incrementalSync.ts    # 兼容层，转导出 application 层的用例
 │   ├── moduleSync.ts         # ModuleSyncer：模块同步
-│   └── imgSync.ts            # ImageSyncer：图片同步
+│   ├── imgSync.ts            # ImageSyncer：图片同步
+│   └── hooks.ts              # 循环钩子（暂停 / 停止 / 进度 / 日志 / 条目）
 └── utils/
     ├── tools.ts              # 拼音、时间格式化、标题规范化、站点 URL 规范化等
     ├── cron.ts               # cron 表达式解析与下次触发时间（纯函数，可单测）
@@ -426,21 +476,44 @@ RouteRedirect / SyncCommands / QueryCommands / UpdateCommands / AiQueryCommands
 
 所有子插件共享**同一个配置对象**，因此注册时统一传 `config`；不需要配置的子插件会忽略它。
 
+### 分层（整洁架构）与迁移阶段
+
+目录按依赖方向分层：`domain` ← `application` ← `infrastructure` / `plugins`。
+
+| 层 | 目录 | 职责 | 允许依赖 |
+| --- | --- | --- | --- |
+| Domain | `src/domain/` | 实体、值对象、业务判定（忽略规则匹配、同步三态判定） | 无 |
+| Application | `src/application/` | 用例编排（增量同步、忽略列表） | domain |
+| Infrastructure | `src/infrastructure/` | 仓储实现、日志落库与广播 | domain |
+| Interface | `src/plugins/`、`client/` | Koishi 命令、控制台 API、Vue 组件 | 全部 |
+
+迁移是分阶段的，**不推翻重写**：
+
+- **P0（已完成）** 建立 domain / application / infrastructure；把「是否跳过 / 是否同步」上移到领域层（`decideIgnore` / `classifySyncResult`）；增量同步迁到 `application/sync/incrementalSyncUseCase.ts`，`sync/incrementalSync.ts` 只做转导出。
+- **P1（已完成）** Page / Image / Module 执行器只做执行与上报；`SyncReporter` 端口把日志交给 `SyncRunRecorder`，`ctx.logger` 只留致命错误与启动信息。
+- **P2（已完成）** 忽略列表改为数据库驱动，命令与控制台 API 共用 `IgnoreListUseCase`。
+- **P3（下一步）** `plugins/` 物理迁入 `interface/`（纯移动 + 改 import，不改行为）；`services/wikiBotService` 抽成 `infrastructure/wiki`，AI 客户端抽成 `infrastructure/ai`。
+- **P4（下一步）** 全量同步（页面 / 图片 / 模块）收敛成 `FullSyncUseCase`，`SyncConsole` 只剩「参数装配 + 事件注册」。
+- **P5（可选）** 前端按 feature 拆目录（如 `client/onisync/components/TaskDetailDrawer.vue`）。
+
 ### AI 数据流
 
 ```
 .ai 提问
-   ↓  第 1 轮（tools + tool_choice:'auto'）
-DeepSeek 决定调用 search_oni_bwiki(keyword)
-   ↓
+   ↓  第 N 轮（tools + tool_choice:'auto'，N ≤ aiMaxToolRounds）
+DeepSeek 拆解问题，调用 search_oni_bwiki(keyword)
+   ↓   ← 拿到资料后可以继续下一轮，换个词条再查（多轮工具调用）
 wikipages 精确标题 → 拼音/首字母模糊 → BWiki 全文检索 → 关键词原样当标题
    ↓
 WikiBotService.fetchPagePlainText(title)
    ├─ mwn.parseTitle(title, { prop:'text', redirects:true, ... })   ← 模板/模块已展开
    ├─ extractPlainText(html, { tableMode:'flatten', maxLength:3000 })
    └─ 进程内缓存 10 分钟 / 最多 50 页
-   ↓  第 2 轮（tools + tool_choice:'none'，role:'tool' 回填正文）
-DeepSeek 生成回答 ──> QQ / 纯文本 + 数据来源
+   ↓  role:'tool' 回填正文，循环继续
+模型不再发起 tool_calls → 这一轮的文本就是最终回答
+   （或达到轮数上限 → 追加收尾提示 + tool_choice:'none'）
+   ↓
+QQ / 纯文本 + 数据来源
 ```
 
 关键约束：
@@ -448,9 +521,10 @@ DeepSeek 生成回答 ──> QQ / 纯文本 + 数据来源
 | 规则 | 原因 |
 | --- | --- |
 | 每个 `tool_call` 都必须回一条 `role:'tool'` | 少一条，下一次请求会被服务端判为 400 |
-| 第 2 轮传 `tools` 但 `tool_choice:'none'` | 消息结构对各家兼容层都合法，同时禁止再调工具 |
-| 最多执行 2 个检索 | 比较类问题够用；更多会导致延迟与 token 翻倍 |
+| 单轮最多 2 个检索、单次问答最多 6 个页面 | 控制延迟与 token；需要更多资料请分轮 |
+| 达到 `aiMaxToolRounds`（默认 5）时强制 `tool_choice:'none'` | 防止死循环，同时保证一定拿得到文本 |
 | 模型不调工具时用 `tool_choice:'required'` 强制一次 | 防止它凭记忆作答（缺氧数值极易记错） |
+| 允许计算推导，但只能用资料里的数值 | 「产氧量 ÷ 每人耗氧量」是推导，不是编造 |
 | 清洗不删 `<table>` | bwiki 的信息框就是 `table.infobox`，删了等于把耗电/产热/尺寸删掉 |
 
 > 抽取器优先保留信息框：`电解器` 抽出 2637 字，含 `电力：消耗 120 瓦`、`过热：75°C`；
