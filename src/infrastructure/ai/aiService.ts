@@ -1,6 +1,6 @@
 import { Context } from "koishi";
-import type { AiConfig } from "../config";
-import { getErrorMessage } from "../utils/tools";
+import type { AiConfig } from "../../config";
+import { getErrorMessage } from "../../utils/tools";
 
 /** DeepSeek 对话客户端（Function Calling）。只用 ctx.http，不引 SDK */
 

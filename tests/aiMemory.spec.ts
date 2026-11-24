@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { AiMemory, pickContext } from "../src/services/aiMemory";
+import { AiMemory, pickContext } from "../src/application/ai/aiMemory";
 
 const PAGE = "电解器";
 
@@ -12,7 +12,7 @@ function storedTurn(question: string, at = Date.now()) {
   return { question, answer: `${question}的答案`, page: PAGE, at };
 }
 
-describe("services/aiMemory", () => {
+describe("application/ai/aiMemory", () => {
   it("保留最近 maxTurns 轮，丢弃更早的", () => {
     const memory = new AiMemory(2, 60_000);
     memory.add("k", turn("第一问"));

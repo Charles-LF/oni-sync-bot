@@ -1,15 +1,15 @@
 import { Context } from "koishi";
 import { resolve } from "path";
 import { Config } from "./config";
-import { CronService } from "./plugins/cronService";
-import { WikiBotService } from "./services/wikiBotService";
-import { DatabaseExtension } from "./plugins/databaseExtension";
-import { RouteRedirect } from "./plugins/routeRedirect";
-import { SyncConsole } from "./plugins/syncConsole";
-import { SyncCommands } from "./plugins/syncCommands";
-import { QueryCommands } from "./plugins/queryCommands";
-import { UpdateCommands } from "./plugins/updateCommands";
-import { AiQueryCommands } from "./plugins/aiQueryCommands";
+import { CronService } from "./interface/cronService";
+import { WikiBotService } from "./infrastructure/wiki/wikiBotService";
+import { DatabaseExtension } from "./infrastructure/persistence/databaseExtension";
+import { RouteRedirect } from "./interface/routeRedirect";
+import { SyncConsole } from "./interface/syncConsole";
+import { SyncCommands } from "./interface/syncCommands";
+import { QueryCommands } from "./interface/queryCommands";
+import { UpdateCommands } from "./interface/updateCommands";
+import { AiQueryCommands } from "./interface/aiQueryCommands";
 
 export { Config };
 

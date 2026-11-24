@@ -1,9 +1,9 @@
 import { Context, Service } from "koishi";
-import type { AccountConfig } from "../config";
+import type { AccountConfig } from "../../config";
 import { Mwn } from "mwn";
-import { logger, getErrorMessage } from "../utils/tools";
-import { withRetry } from "../utils/async";
-import { extractPlainText } from "../utils/renderText";
+import { logger, getErrorMessage } from "../../utils/tools";
+import { withRetry } from "../../utils/async";
+import { extractPlainText } from "../../utils/renderText";
 import { createReloginAwareProxy } from "./reloginAwareProxy";
 
 declare module "koishi" {

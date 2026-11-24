@@ -1,5 +1,5 @@
 import { Context } from "koishi";
-import { createCronScheduler } from "../services/cronScheduler";
+import { createCronScheduler } from "../infrastructure/sync/cronScheduler";
 
 /**
  * 提供 `ctx.oniCron`：插件内置的定时任务调度器。

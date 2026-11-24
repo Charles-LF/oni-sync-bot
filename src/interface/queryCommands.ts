@@ -2,8 +2,8 @@ import { Context, Session } from "koishi";
 import type { SiteConfig } from "../config";
 import { generatePinyinInfo } from "../utils/tools";
 import { findFuzzyMatches, type MatchResult } from "../utils/matcher";
-import { MessageRenderer } from "../services/messageRenderer";
-import { WikiPages } from "./databaseExtension";
+import { MessageRenderer } from "./messageRenderer";
+import { WikiPages } from "../infrastructure/persistence/databaseExtension";
 
 /** 只用到共享站点配置里的 domain */
 export type QueryCommandsConfig = Pick<SiteConfig, "domain">;

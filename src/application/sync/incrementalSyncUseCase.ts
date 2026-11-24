@@ -3,13 +3,13 @@ import type { PageSyncer, SyncNotifyItem } from "../../sync/pageSync";
 import type { ImageSyncer } from "../../sync/imgSync";
 import type {
   SyncChangeRecord,
-  SyncRepository,
-} from "../../services/syncRepository";
+  SyncStatePort,
+} from "./syncStatePort";
+import type { RunToken } from "../../domain/sync/runToken";
 import type {
   ProgressReporter,
-  RunToken,
   SyncRunSummary,
-} from "../../services/syncTaskManager";
+} from "./syncTypes";
 import { decideIgnore } from "../../domain/sync/decision";
 import type { IgnoreRuleSet } from "../../domain/sync/ignoreRule";
 import {
@@ -65,7 +65,7 @@ export interface IncrementalSyncDeps {
   target: Mwn;
   pages: PageSyncer;
   images: ImageSyncer;
-  repo: SyncRepository;
+  repo: SyncStatePort;
   /** 同步成功后一次性回调（群通知） */
   notify?: (items: SyncNotifyItem[]) => void;
   /** 任务详情（日志流 / 条目列表）的输出端口；不传则不收集 */

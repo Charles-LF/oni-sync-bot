@@ -5,14 +5,14 @@ import {
   residualSubject,
   toBlockText,
   wrapCodeBlock,
-} from "../src/plugins/aiQueryCommands";
-import { AiMemory } from "../src/services/aiMemory";
+} from "../src/interface/aiQueryCommands";
+import { AiMemory } from "../src/application/ai/aiMemory";
 import { generatePinyinInfo } from "../src/utils/tools";
 import type {
   AgentMessage,
   CompletionResult,
   ParsedToolCall,
-} from "../src/services/aiService";
+} from "../src/infrastructure/ai/aiService";
 
 /**
  * 只测 Agent 的「调度」逻辑：用原型造实例、塞假的 ctx / ai，
@@ -107,7 +107,7 @@ function toolMessages(messages: AgentMessage[]) {
   }>;
 }
 
-describe("plugins/aiQueryCommands Agent 调度", () => {
+describe("interface/aiQueryCommands Agent 调度", () => {
   it("单次 tool_call：把正文以 role:'tool' 回填，并让 id 对上", async () => {
     const { plugin, completeCalls, fetched } = createPlugin({
       decisions: [
@@ -520,7 +520,7 @@ describe("plugins/aiQueryCommands Agent 调度", () => {
   });
 });
 
-describe("plugins/aiQueryCommands 追问判定", () => {
+describe("interface/aiQueryCommands 追问判定", () => {
   describe("residualSubject", () => {
     it("纯属性/指代词剔完什么都不剩", () => {
       assert.equal(residualSubject("耗电多少"), "");
@@ -560,7 +560,7 @@ describe("plugins/aiQueryCommands 追问判定", () => {
   });
 });
 
-describe("plugins/aiQueryCommands 回复渲染", () => {
+describe("interface/aiQueryCommands 回复渲染", () => {
   /** QQ 场景：renderer.send 直接回传 markdown，方便断言 */
   function createRendererPlugin(threshold: number) {
     const plugin = Object.create(AiQueryCommands.prototype) as any;
@@ -690,7 +690,7 @@ describe("plugins/aiQueryCommands 回复渲染", () => {
   });
 });
 
-describe("plugins/aiQueryCommands 多人群聊隔离", () => {
+describe("interface/aiQueryCommands 多人群聊隔离", () => {
   const SESSION = { platform: "qq", channelId: "group1", userId: "user-b" } as any;
   const ELECTROLYZER = {
     question: "电解器是什么",

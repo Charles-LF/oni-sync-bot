@@ -1,146 +1,30 @@
 import { Context } from "koishi";
-import { getErrorMessage, logger } from "../utils/tools";
-
-/** 任务状态：paused 只表示「已暂停且仍在运行中」 */
-export type SyncTaskState = "idle" | "running" | "paused" | "stopped";
-
-export type SyncTaskId = "delta" | "pages" | "images" | "modules";
-
-export interface SyncProgress {
-  /** 当前阶段名，如「列举页面」「同步页面」 */
-  phase: string;
-  /** 当前阶段已处理条数 */
-  current: number;
-  /** 当前阶段总条数；0 表示未知 */
-  total: number;
-  synced: number;
-  skipped: number;
-  failed: number;
-  /** 给用户看的一句话进度 */
-  message: string;
-}
-
-/** 任务的静态描述 */
-export interface SyncTaskMeta {
-  id: SyncTaskId;
-  label: string;
-  description: string;
-  /** false = 由代码自动调度，前端不提供开始/暂停/停止 */
-  controllable: boolean;
-}
-
-export interface SyncTaskSnapshot extends SyncTaskMeta {
-  state: SyncTaskState;
-  progress: SyncProgress;
-  startedAt?: number;
-  finishedAt?: number;
-  lastError?: string;
-  lastSummary?: string;
-  lastTrigger?: string;
-  /** 最近一次运行 id（点开任务卡片时用它取详情） */
-  lastRunId?: string;
-}
-
-/** 推给控制台的整块状态 */
-export interface SyncPanelSnapshot {
-  tasks: SyncTaskSnapshot[];
-  /** 当前正在执行（或暂停中）的任务；同一时刻只有一个 */
-  activeId?: SyncTaskId;
-  version: number;
-}
-
-export interface SyncRunSummary {
-  synced: number;
-  skipped: number;
-  failed: number;
-  message: string;
-}
-
-export class SyncAbortedError extends Error {
-  constructor(message = "同步任务已停止") {
-    super(message);
-    this.name = "SyncAbortedError";
-  }
-}
+import { RunToken, SyncAbortedError } from "../../domain/sync/runToken";
+import {
+  emptyProgress,
+  type ControlResult,
+  type ProgressReporter,
+  type SyncPanelSnapshot,
+  type SyncProgress,
+  type SyncRunSummary,
+  type SyncRunner,
+  type SyncTaskId,
+  type SyncTaskMeta,
+  type SyncTaskState,
+} from "../../application/sync/syncTypes";
+import { getErrorMessage, logger } from "../../utils/tools";
 
 /**
- * 协作式取消令牌。
+ * 多任务同步管理器（基础设施层）。
  *
- * 只在**分片边界**（处理下一个页面 / 下一批图片之前）检查：
- * 进行中的那次 mwn 请求一定会跑完，前端点「停止」不会留下半截请求或卡死。
+ * 状态/进度类型定义在应用层（`application/sync/syncTypes.ts`），取消令牌在领域层
+ * （`domain/sync/runToken.ts`）；这里只负责运行期调度与状态机。
  */
-export class RunToken {
-  private stopped = false;
-  private pausedFlag = false;
-  private waiters: Array<() => void> = [];
-
-  get paused(): boolean {
-    return this.pausedFlag;
-  }
-
-  get aborted(): boolean {
-    return this.stopped;
-  }
-
-  pause(): void {
-    if (!this.stopped) this.pausedFlag = true;
-  }
-
-  resume(): void {
-    this.pausedFlag = false;
-    this.flush();
-  }
-
-  abort(): void {
-    this.stopped = true;
-    this.pausedFlag = false;
-    this.flush();
-  }
-
-  /** 每个分片开始前调用：已停止则抛错，已暂停则原地等待 */
-  async checkpoint(): Promise<void> {
-    if (this.stopped) throw new SyncAbortedError();
-    while (this.pausedFlag && !this.stopped) {
-      await new Promise<void>((resolve) => this.waiters.push(resolve));
-    }
-    if (this.stopped) throw new SyncAbortedError();
-  }
-
-  private flush(): void {
-    const waiters = this.waiters;
-    this.waiters = [];
-    for (const resolve of waiters) resolve();
-  }
-}
-
-/** 进度上报函数：传入要覆盖的字段 */
-export type ProgressReporter = (patch: Partial<SyncProgress>) => void;
-
-export type SyncRunner = (
-  token: RunToken,
-  report: ProgressReporter,
-) => Promise<SyncRunSummary>;
-
-export interface ControlResult {
-  ok: boolean;
-  message: string;
-  status: SyncPanelSnapshot;
-}
+export * from "../../application/sync/syncTypes";
+export { RunToken, SyncAbortedError } from "../../domain/sync/runToken";
 
 /** 状态变更立即推送，进度变更节流推送 */
 const PROGRESS_NOTIFY_DELAY = 400;
-
-export function emptyProgress(): SyncProgress {
-  return {
-    phase: "空闲",
-    current: 0,
-    total: 0,
-    synced: 0,
-    skipped: 0,
-    failed: 0,
-    message: "",
-  };
-}
 
 interface TaskRuntime extends SyncTaskMeta {
   state: SyncTaskState;

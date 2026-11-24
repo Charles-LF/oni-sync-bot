@@ -1,6 +1,6 @@
 import { Context } from "koishi";
-import { getErrorMessage, logger } from "../utils/tools";
-import { nextCronTime, parseCron, type CronSchedule } from "../utils/cron";
+import { getErrorMessage, logger } from "../../utils/tools";
+import { nextCronTime, parseCron, type CronSchedule } from "../../utils/cron";
 
 /** 定时任务回调：抛错只记日志，不影响后续调度 */
 export type CronTask = () => unknown | Promise<unknown>;

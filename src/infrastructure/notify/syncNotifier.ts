@@ -1,12 +1,12 @@
 import { Bot, Context } from "koishi";
-import type { SyncNotifyItem } from "../sync/pageSync";
+import type { SyncNotifyItem } from "../../sync/pageSync";
 import {
   formatWikiTime,
   getErrorMessage,
   logger,
   normalizeChannelId,
   truncateComment,
-} from "../utils/tools";
+} from "../../utils/tools";
 
 /**
  * 把增量更新中同步成功的条目合并成一条消息，推送到配置的群频道。

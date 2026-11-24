@@ -34,4 +34,4 @@ export interface SyncLoopResult {
 }
 
 /** 主动停止时抛出的错误名，循环内部据此区分「中止」与「真异常」 */
-export const ABORT_ERROR_NAME = "SyncAbortedError";
+export { ABORT_ERROR_NAME } from "../domain/sync/runToken";

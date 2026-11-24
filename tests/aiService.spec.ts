@@ -7,7 +7,7 @@ import {
   isNoAnswer,
   type AgentMessage,
   type ToolDefinition,
-} from "../src/services/aiService";
+} from "../src/infrastructure/ai/aiService";
 
 const SETTINGS = {
   aiEnabled: true,
@@ -46,7 +46,7 @@ function reply(message: Record<string, unknown>) {
   return { choices: [{ message }] };
 }
 
-describe("services/aiService 提示词", () => {
+describe("infrastructure/ai/aiService 提示词", () => {
   it("收尾提示词：只用已有资料，但允许计算推导", () => {
     assert.ok(ANSWER_SYSTEM_PROMPT.includes("检索轮数已达上限"));
     assert.ok(ANSWER_SYSTEM_PROMPT.includes("不得补充资料外的机制"));
@@ -72,7 +72,7 @@ describe("services/aiService 提示词", () => {
   });
 });
 
-describe("services/aiService.complete", () => {
+describe("infrastructure/ai/aiService.complete", () => {
   const messages: AgentMessage[] = [{ role: "user", content: "电解器耗电多少" }];
 
   it("传了 tools 就把 tools 与 tool_choice 写进请求体", async () => {

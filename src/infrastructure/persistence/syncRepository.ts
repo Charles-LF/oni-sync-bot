@@ -1,10 +1,11 @@
 import { Context } from "koishi";
+import type { SyncConfigRow, SyncLogRow } from "./databaseExtension";
 import type {
-  SyncConfigRow,
-  SyncImageRow,
-  SyncLogRow,
-} from "../plugins/databaseExtension";
-import { getErrorMessage, logger } from "../utils/tools";
+  SyncChangeRecord,
+  SyncImageFingerprint,
+  SyncStatePort,
+} from "../../application/sync/syncStatePort";
+import { getErrorMessage, logger } from "../../utils/tools";
 
 /** `sync_config` 里用到的键集中在此，避免各处散落字符串 */
 export const SYNC_CONFIG_KEYS = {
@@ -19,17 +20,7 @@ const WRITE_CHUNK = 200;
 /** 写满这么多条才做一次裁剪，避免每次都全表读 id */
 const TRIM_EVERY = 200;
 
-export interface SyncChangeRecord {
-  id: string;
-  title: string;
-  user: string;
-  timestamp: string;
-  comment: string;
-  sizeDiff: number;
-  revid?: string;
-  parentid?: string;
-  ns?: number;
-}
+export type { SyncChangeRecord } from "../../application/sync/syncStatePort";
 
 export interface SyncChangeListItem {
   id: string;
@@ -59,7 +50,7 @@ const LIST_FIELDS = ["id", "title", "user", "timestamp", "comment", "sizeDiff"] 
  *
  * 水位与 cron 放数据库而不是内存，Koishi 重启（部署 / 崩溃重拉）后增量不会重头再来。
  */
-export class SyncRepository {
+export class SyncRepository implements SyncStatePort {
   private configCache = new Map<string, string>();
   private imageCount?: number;
   private writtenSinceTrim = 0;
@@ -253,13 +244,13 @@ export class SyncRepository {
   }
 
   /** 一次取回全部指纹（几百条量级，够轻） */
-  async loadImageIndex(): Promise<Map<string, SyncImageRow>> {
+  async loadImageIndex(): Promise<Map<string, SyncImageFingerprint>> {
     const rows = await this.ctx.database.get("sync_images", {});
     this.imageCount = rows.length;
     return new Map(rows.map((row) => [row.title, row]));
   }
 
-  async upsertImages(rows: SyncImageRow[]): Promise<void> {
+  async upsertImages(rows: SyncImageFingerprint[]): Promise<void> {
     if (rows.length === 0) return;
     for (let i = 0; i < rows.length; i += WRITE_CHUNK) {
       await this.ctx.database.upsert("sync_images", rows.slice(i, i + WRITE_CHUNK));

@@ -3,7 +3,7 @@ import type {
   SyncRunItemRow,
   SyncRunLogRow,
   SyncRunRow,
-} from "../../plugins/databaseExtension";
+} from "./databaseExtension";
 import { getErrorMessage, logger } from "../../utils/tools";
 
 /** 单条 SQL 的参数上限有限，写入按下标切片 */

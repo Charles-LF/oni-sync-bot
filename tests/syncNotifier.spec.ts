@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { SyncNotifier } from "../src/services/syncNotifier";
+import { SyncNotifier } from "../src/infrastructure/notify/syncNotifier";
 
 function createNotifier(channelIds: string[]) {
   const sent: Array<{ channelId: string; message: string }> = [];
@@ -20,7 +20,7 @@ function createNotifier(channelIds: string[]) {
   return { notifier, sent };
 }
 
-describe("services/syncNotifier 群通知", () => {
+describe("infrastructure/notify/syncNotifier 群通知", () => {
   it("没有配置群号时视为关闭，不注册回调", () => {
     const { notifier } = createNotifier([]);
     assert.equal(notifier.enabled, false);

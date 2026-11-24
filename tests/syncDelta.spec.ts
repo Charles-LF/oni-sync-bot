@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
-import { SyncRepository } from "../src/services/syncRepository";
+import { SyncRepository } from "../src/infrastructure/persistence/syncRepository";
 import {
   RunToken,
   SyncAbortedError,
-  SyncTaskManager,
-  type SyncRunner,
-} from "../src/services/syncTaskManager";
+} from "../src/domain/sync/runToken";
+import { SyncTaskManager } from "../src/infrastructure/sync/syncTaskManager";
+import type { SyncRunner } from "../src/application/sync/syncTypes";
 import { runIncrementalSync } from "../src/sync/incrementalSync";
 
 /** 一张表的主键，供假数据库做 upsert 去重 */
@@ -86,7 +86,7 @@ async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-describe("services/syncTaskManager 取消令牌", () => {
+describe("infrastructure/sync/syncTaskManager 取消令牌", () => {
   it("暂停时 checkpoint 会等待，继续后放行", async () => {
     const token = new RunToken();
     token.pause();
@@ -115,7 +115,7 @@ describe("services/syncTaskManager 取消令牌", () => {
   });
 });
 
-describe("services/syncTaskManager 状态机", () => {
+describe("infrastructure/sync/syncTaskManager 状态机", () => {
   const META = [
     {
       id: "delta" as const,
@@ -267,7 +267,7 @@ describe("services/syncTaskManager 状态机", () => {
   });
 });
 
-describe("services/syncRepository", () => {
+describe("infrastructure/persistence/syncRepository", () => {
   it("写入更改按 rcid 去重，重复拉取不会写两遍", async () => {
     const { repo } = createRepo();
     const record = {

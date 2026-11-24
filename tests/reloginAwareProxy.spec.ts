@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import type { Mwn } from "mwn";
-import { createReloginAwareProxy } from "../src/services/reloginAwareProxy";
+import { createReloginAwareProxy } from "../src/infrastructure/wiki/reloginAwareProxy";
 
 /**
  * 假 client：像 mwn 一样**通过 `this` 访问自己的成员**。
@@ -37,7 +37,7 @@ const callRequest = (proxy: Mwn) =>
 const callGen = (proxy: Mwn) =>
   (proxy.continuedQueryGen as unknown as () => AsyncGenerator<string>)();
 
-describe("services/reloginAwareProxy", () => {
+describe("infrastructure/wiki/reloginAwareProxy", () => {
   it("普通方法：保留 this 绑定", async () => {
     const proxy = proxyOf(() => new FakeBot());
     assert.equal(await callRequest(proxy), "ok:bot-instance");

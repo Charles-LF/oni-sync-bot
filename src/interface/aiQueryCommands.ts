@@ -9,9 +9,9 @@ import {
   type AgentMessage,
   type ParsedToolCall,
   type ToolDefinition,
-} from "../services/aiService";
-import { AiMemory, pickContext, type MemoryTurn } from "../services/aiMemory";
-import { MessageRenderer } from "../services/messageRenderer";
+} from "../infrastructure/ai/aiService";
+import { AiMemory, pickContext, type MemoryTurn } from "../application/ai/aiMemory";
+import { MessageRenderer } from "./messageRenderer";
 import { generatePinyinInfo, getErrorMessage, siteUrl } from "../utils/tools";
 import { findFuzzyMatches } from "../utils/matcher";
 

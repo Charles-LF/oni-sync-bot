@@ -7,25 +7,24 @@ import type {
   SyncRunItemRow,
   SyncRunLogRow,
   SyncRunRow,
-} from "./databaseExtension";
+} from "../infrastructure/persistence/databaseExtension";
 import { PageSyncer } from "../sync/pageSync";
 import { ImageSyncer } from "../sync/imgSync";
 import { ModuleSyncer } from "../sync/moduleSync";
 import type { SyncLoopHooks, SyncLoopProgress } from "../sync/hooks";
-import { SyncNotifier } from "../services/syncNotifier";
-import { SyncRepository, SYNC_CONFIG_KEYS } from "../services/syncRepository";
-import type { SyncChangeListItem } from "../services/syncRepository";
-import {
-  SyncAbortedError,
-  SyncTaskManager,
-  type ControlResult,
-  type ProgressReporter,
-  type RunToken,
-  type SyncPanelSnapshot,
-  type SyncTaskId,
-  type SyncTaskMeta,
-  type SyncRunSummary,
-} from "../services/syncTaskManager";
+import { SyncNotifier } from "../infrastructure/notify/syncNotifier";
+import { SyncRepository, SYNC_CONFIG_KEYS } from "../infrastructure/persistence/syncRepository";
+import type { SyncChangeListItem } from "../infrastructure/persistence/syncRepository";
+import { SyncTaskManager } from "../infrastructure/sync/syncTaskManager";
+import { SyncAbortedError, type RunToken } from "../domain/sync/runToken";
+import type {
+  ControlResult,
+  ProgressReporter,
+  SyncPanelSnapshot,
+  SyncTaskId,
+  SyncTaskMeta,
+  SyncRunSummary,
+} from "../application/sync/syncTypes";
 import type { SyncNotifyItem } from "../sync/pageSync";
 import { getErrorMessage, logger } from "../utils/tools";
 import { IncrementalSyncUseCase } from "../application/sync/incrementalSyncUseCase";
