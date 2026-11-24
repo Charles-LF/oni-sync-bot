@@ -390,7 +390,7 @@ onMounted(() => {
 </script>
 
 <style lang="scss" scoped>
-@use "./styles/drawer.scss" as *;
+@use "../shared/styles/drawer.scss" as *;
 
 .oni-sync {
   display: flex;

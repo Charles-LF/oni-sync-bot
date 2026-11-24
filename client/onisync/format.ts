@@ -1,24 +1,15 @@
-import { Time } from "@koishijs/client";
+import { formatShortDateTime } from "../shared/time";
 import type { IgnoreRuleView, SyncRunRow, TaskState } from "./types";
 
-/** 时间与尺寸的展示格式集中在这里，避免各组件各写一份 */
+/** 同步运维专用格式化；时间相关的基础函数统一放在 `shared/time.ts` */
+
+export { formatClock, formatDateTime as formatTime } from "../shared/time";
 
 export function formatISO(value?: string): string {
   if (!value) return "-";
   const time = Date.parse(value);
   if (!Number.isFinite(time)) return value;
-  return Time.template("MM-dd hh:mm", new Date(time));
-}
-
-export function formatTime(value?: number): string {
-  if (!value) return "-";
-  return Time.template("yyyy-MM-dd hh:mm", new Date(value));
-}
-
-/** 日志行只显示时分秒 */
-export function formatClock(value?: number): string {
-  if (!value) return "";
-  return Time.template("hh:mm:ss", new Date(value));
+  return formatShortDateTime(time);
 }
 
 export function formatSize(diff: number): string {

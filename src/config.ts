@@ -145,6 +145,8 @@ export interface AiConfig {
   aiCodeBlockMinChars: number;
   /** 单次问答最多允许多少轮工具调用（防死循环） */
   aiMaxToolRounds: number;
+  /** AI 对话日志保留条数（AI 运营面板的数据源） */
+  aiChatLogLimit: number;
 }
 
 export const AiConfig: Schema<AiConfig> = Schema.object({
@@ -201,6 +203,13 @@ export const AiConfig: Schema<AiConfig> = Schema.object({
     .default(5)
     .min(1)
     .max(8),
+  aiChatLogLimit: Schema.natural()
+    .description(
+      "AI 对话日志保留条数，超出后自动删除最早的记录（控制台「AI 运营面板」的数据源）",
+    )
+    .default(10000)
+    .min(100)
+    .max(100000),
 });
 
 /** 完整配置 = 各分组之并集，顺序即控制台展示顺序 */

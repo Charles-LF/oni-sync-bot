@@ -120,7 +120,7 @@ onMounted(() => void load());
 </script>
 
 <style lang="scss" scoped>
-@use "../styles/drawer.scss" as *;
+@use "../../shared/styles/drawer.scss" as *;
 
 .ignore {
   padding: 14px 16px;

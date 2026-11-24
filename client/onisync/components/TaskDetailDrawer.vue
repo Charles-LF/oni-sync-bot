@@ -253,7 +253,7 @@ const clientContext = useContext();
 </script>
 
 <style lang="scss" scoped>
-@use "../styles/drawer.scss" as *;
+@use "../../shared/styles/drawer.scss" as *;
 
 .run-drawer {
   width: min(880px, 96vw);

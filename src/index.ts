@@ -6,6 +6,7 @@ import { WikiBotService } from "./infrastructure/wiki/wikiBotService";
 import { DatabaseExtension } from "./infrastructure/persistence/databaseExtension";
 import { RouteRedirect } from "./interface/routeRedirect";
 import { SyncConsole } from "./interface/syncConsole";
+import { AiInsightsConsole } from "./interface/aiInsightsConsole";
 import { SyncCommands } from "./interface/syncCommands";
 import { QueryCommands } from "./interface/queryCommands";
 import { UpdateCommands } from "./interface/updateCommands";
@@ -21,6 +22,7 @@ const SUB_PLUGINS = [
   DatabaseExtension,
   WikiBotService,
   SyncConsole,
+  AiInsightsConsole,
   RouteRedirect,
   SyncCommands,
   QueryCommands,

@@ -65,6 +65,18 @@
 > Wikitext 源码**只**用于同步，永远不会进入 AI 链路。AI 只看到渲染后的纯文本。
 > 正文按页缓存 10 分钟（最多 50 页），群里反复问同一页不会重复请求 bwiki。
 
+### 📊 AI 运营面板（控制台 `/ai`）
+
+与「同步运维」并列的第二个页面，用来看机器人的 AI 使用情况：
+
+- **三个统计卡片 + 今日提问** — 总提问数 / 独立用户数（按 QQ 去重）/ 工具调用次数
+- **7 天提问趋势** — 零依赖 SVG 折线图（面积渐变 + 网格 + 悬停数值），按**北京时间**切日
+- **最关心的游戏名词 Top 5** — 来自工具调用的 `keyword` 词频，点一下就用这个词筛对话流
+- **高频问题 Top 10** — 归一化（去空白 / 标点 / 大小写）后分组，点击同样可以筛
+- **实时对话流** — 时间 / 用户 / 问题 / 回答摘要 / 查了什么；点行看完整回答，
+  新对话由 `ai/chat/new` 广播推过来（可关掉「实时」攒成「有 N 条新对话」提示）
+- **写日志不挡回答** — 记录是 fire-and-forget 的旁路，`aiInsights` 服务缺失时问答照常工作
+
 ### 🔌 路由
 
 - **短链跳转** — `/gg/:id`、`/bw/:id` 按数据库中的页面 ID 跳转
@@ -149,6 +161,7 @@ npm uninstall vectra @huggingface/transformers   # 0.12.0 起不再需要
 | `aiChannelMemory`     | AI   | 群内话题承接：别人刚问过，自己接着问也能懂「那它…」            | `true`                     |
 | `aiCodeBlockMinChars` | AI   | QQ 下回答超过这么多字就塞进代码块（`0` = 始终不用）            | `180`                      |
 | `aiMaxToolRounds`     | AI   | 复合问题允许的最大工具调用轮数（超出强制收尾）                | `5`                        |
+| `aiChatLogLimit`      | AI   | AI 运营面板对话日志保留条数（超出删最早的一批）                | `10000`                    |
 
 > **已删除的配置（0.12.5 起 schema 中不再存在）**：
 > `textSyncOnChange`、`textApiUrl`、`textTableMode`、`textMaxLength`、`textSyncInterval`，
@@ -357,10 +370,13 @@ npm uninstall vectra @huggingface/transformers   # 0.12.0 起不再需要
 | `sync_runs` | `id`（主键）、`taskId`、`trigger`、`state`、`startedAt`、`finishedAt`、`message`、`total`/`synced`/`skipped`/`failed` |
 | `sync_run_items` | `id`（`runId#seq`）、`runId`、`title`、`action`（synced/skipped/failed）、`reason`、`at`                   |
 | `sync_run_logs` | `id`（`runId#seq`）、`runId`、`level`（info/warn/error）、`message`、`at`                                   |
+| `ai_chat_logs` | `id`（自增主键）、`userId`、`userName`、`question`、`answer`、`toolCalls`（JSON）、`createdAt`（timestamp）      |
 
-`wikipages` / `oniaimemory` / `sync_*` 通过 `Tables` 接口增强声明（见 `databaseExtension.ts`）。
+`wikipages` / `oniaimemory` / `sync_*` / `ai_chat_logs` 通过 `Tables` 接口增强声明（见 `databaseExtension.ts`）。
 `sync_runs` / `sync_run_items` / `sync_run_logs` 是任务详情抽屉的数据源，
 `syncRunKeep` 控制保留多少次运行、`syncTaskLogLimit` 控制每次运行保留的日志条数。
+`ai_chat_logs` 是 AI 运营面板的数据源，`aiChatLogLimit`（默认 1w）控制保留条数：
+每次写入后检查总数，超出就按 `id` 升序删掉最早的一批（写入串行排队，并维护内存计数，不会每写一条就全表 count）。
 
 > 0.12.0 起不再维护 `wikitexts` 表（渲染文本改为按需抓取），0.12.5 起连表声明也移除了。
 > 0.14.0 起不再有 `onitodos` 表（TodoList 功能已移除）。
@@ -370,12 +386,16 @@ npm uninstall vectra @huggingface/transformers   # 0.12.0 起不再需要
 
 ## 🎨 控制台界面
 
-插件在 Koishi 控制台注册两个页面（见 [`client/index.ts`](client/index.ts)）：
+插件在 Koishi 控制台注册三个页面（见 [`client/index.ts`](client/index.ts)）：
 
 | 页面       | 路径          | 源码位置                   | 功能                                        |
 | ---------- | ------------- | -------------------------- | ------------------------------------------- |
 | 同步运维   | `/`（首页）   | `client/onisync/`          | 任务卡片 + 进度 + 最近更改列表（diff 抽屉）  |
+| AI 运营面板 | `/ai`        | `client/ai/`               | 统计数据看板 + 图表 + 实时对话流             |
 | 火箭计算器 | `/calculator` | `client/Rocketcalculator/` | ONI 火箭设计计算器                          |
+
+> 「同步运维」与「AI 运营面板」是两个独立路由（`order` 1000 / 1001），在侧边导航里并列，
+> 切换时各自保留自己的状态；共用样式与时间格式化放在 `client/shared/`。
 
 ### 同步运维面板
 
@@ -401,6 +421,23 @@ npm uninstall vectra @huggingface/transformers   # 0.12.0 起不再需要
 - diff 用 `difftype=unified` 拉取后在客户端按行着色（`+` 绿 / `-` 红 / `@@` 紫），
   比整表 HTML 小一个数量级，也不会出现左右两栏重复显示的问题
 
+### AI 运营面板
+
+页面对应后端 `src/interface/aiInsightsConsole.ts`，控制台事件：
+
+| 事件           | 权限 | 说明                                              |
+| -------------- | ---- | ------------------------------------------------- |
+| `get-ai-logs`  | 0    | `{ offset, limit, keyword }`，分页查询对话（用户名 / QQ / 问题模糊搜索） |
+| `get-ai-stats` | 0    | 看板统计：总人数 / 总提问 / 工具调用 / Top 10 问题 / Top 5 关键词 / 7 日趋势 |
+| `ai/get-log`   | 0    | 单条详情（完整 AI 回答）                           |
+| `ai/chat/new`（广播） | 0 | 新对话写入后推送摘要，前端 `ctx.on("ai/chat/new")` 实时上屏 |
+
+- 写入路径：`.ai` 回答生成后 → `aiQueryCommands.recordChat()` → `AiChatLogUseCase.record()`
+  → `AiChatLogRepository.append()`（串行队列 + 超出 `aiChatLogLimit` 裁剪）→ 广播
+- 全程 `void` 掉 Promise：写库或广播失败只打一条 warn，用户拿到回答的时间不受影响
+- 列表只读 `answer` 生成摘要（120 字），完整回答走 `ai/get-log`，统计接口干脆不读 `answer` 列
+
+
 
 ## 📦 项目结构
 
@@ -409,13 +446,16 @@ src/
 ├── index.ts                  # 组合根：SUB_PLUGINS 注册表 + 控制台入口
 ├── config.ts                 # 配置的唯一声明处（账号 / 站点 / 通知 / 定时 / AI）
 ├── domain/                   # 领域层：纯 TS，不依赖 Koishi / mwn / 数据库
+│   ├── ai/chatLog.ts         # 对话日志类型 + 统计聚合（趋势 / Top 问题 / Top 关键词）
 │   └── sync/
 │       ├── ignoreRule.ts     # 忽略规则值对象 + 归一化 + 通配匹配
 │       ├── decision.ts       # 同步三态判定（synced / skipped / failed）与是否跳过
 │       ├── ports.ts          # SyncReporter 端口 + reportSyncItem
 │       └── runToken.ts       # 协作式取消令牌（RunToken / SyncAbortedError）
 ├── application/              # 应用层：用例编排
-│   ├── ai/aiMemory.ts        # 追问记忆（用户 / 群话题）与上下文选择
+│   ├── ai/
+│   │   ├── aiMemory.ts                # 追问记忆（用户 / 群话题）与上下文选择
+│   │   └── aiChatLogUseCase.ts        # 对话日志用例（记录 / 分页 / 详情 / 统计）
 │   └── sync/
 │       ├── incrementalSyncUseCase.ts  # 增量同步用例（水位 / 拉变更 / 同步页面与图片）
 │       ├── fullSyncUseCase.ts         # 全量同步用例（页面 / 图片 / 模块）
@@ -425,11 +465,12 @@ src/
 ├── infrastructure/           # 基础设施层：仓储与外部输出
 │   ├── ai/aiService.ts       # DeepSeek 客户端（Function Calling）+ 提示词
 │   ├── wiki/                 # wikiBot 服务：登录 / 代理 / 透明重登录 / fetchPagePlainText
-│   ├── persistence/          # databaseExtension（表定义）+ 三个仓储
+│   ├── persistence/          # databaseExtension（表定义）+ 仓储
 │   │   ├── databaseExtension.ts
 │   │   ├── syncRepository.ts      # 水位 / 最近更改 / 图片指纹（实现 SyncStatePort）
 │   │   ├── syncIgnoreRepository.ts
-│   │   └── syncRunRepository.ts   # sync_runs / items / logs 读写与裁剪
+│   │   ├── syncRunRepository.ts   # sync_runs / items / logs 读写与裁剪
+│   │   └── aiChatLogRepository.ts # ai_chat_logs 写入队列 / 裁剪 / 分页 / 统计投影
 │   ├── console/
 │   │   └── syncRunRecorder.ts     # 日志缓冲落库 + sync/log 广播
 │   ├── notify/syncNotifier.ts     # 同步成功后的群通知
@@ -437,6 +478,7 @@ src/
 ├── interface/                # 接口层：Koishi 命令与控制台 API
 │   ├── cronService.ts        # 挂载 ctx.oniCron
 │   ├── syncConsole.ts        # 同步运维面板：任务控制 / 最近更改 / 忽略规则
+│   ├── aiInsightsConsole.ts  # AI 运营面板：对话记录写入 / 分页 / 统计 / ai/chat/new 广播
 │   ├── queryCommands.ts      # x / 查wiki
 │   ├── aiQueryCommands.ts    # ai / ai.status（Agent 多轮调度）
 │   ├── syncCommands.ts       # sync.* 命令 + 贡献者定时任务
@@ -457,14 +499,21 @@ src/
     └── matcher.ts            # 查询打分与模糊匹配（纯函数，可单测）
 
 tests/                        # 单元测试
-client/onisync/               # 控制台前端
+client/shared/                # 前端共用：rpc 薄封装、时间格式化、抽屉样式
+client/onisync/               # 同步运维前端
 ├── dashboard.vue             # 首页组合：概览 / 任务卡片 / 最近更改
 ├── components/
 │   ├── TaskDetailDrawer.vue  # 任务详情抽屉（条目列表 + 实时日志）
 │   ├── ChangeDiffDrawer.vue  # 最近更改 diff 抽屉
 │   └── IgnoreRulePanel.vue   # 忽略规则维护
-├── format.ts / rpc.ts / types.ts / styles/drawer.scss
-└── ...
+└── format.ts / rpc.ts / types.ts
+client/ai/                    # AI 运营面板前端
+├── ai-insights.vue           # 看板 + 图表 + 高频问题 + 实时对话流
+├── components/
+│   ├── TrendChart.vue        # 7 日趋势（零依赖 SVG 折线图）
+│   ├── KeywordBars.vue       # Top 5 名词（CSS 横向条形图）
+│   └── ChatDetailDrawer.vue  # 单条对话详情（完整回答 + 工具调用）
+└── format.ts / types.ts
 ```
 
 ## 🧩 架构与扩展
@@ -527,6 +576,10 @@ WikiBotService.fetchPagePlainText(title)
    （或达到轮数上限 → 追加收尾提示 + tool_choice:'none'）
    ↓
 QQ / 纯文本 + 数据来源
+   ↓  ── 旁路，不阻塞回复 ──
+ai_chat_logs（question / answer / toolCalls）
+   ↓
+广播 ai/chat/new → AI 运营面板（控制台 `/ai`）实时上屏
 ```
 
 关键约束：

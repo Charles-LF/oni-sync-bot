@@ -112,7 +112,7 @@ function decodeEntities(input: string): string {
 </script>
 
 <style lang="scss" scoped>
-@use "../styles/drawer.scss" as *;
+@use "../../shared/styles/drawer.scss" as *;
 
 .diff {
   flex: 1;

@@ -14,6 +14,7 @@ import { AiMemory, pickContext, type MemoryTurn } from "../application/ai/aiMemo
 import { MessageRenderer } from "./messageRenderer";
 import { generatePinyinInfo, getErrorMessage, siteUrl } from "../utils/tools";
 import { findFuzzyMatches } from "../utils/matcher";
+import type { AiChatToolCall } from "../domain/ai/chatLog";
 
 /** 只用到共享站点配置里的 domain 与 bwiki_site */
 export type AiQueryConfig = AiConfig &
@@ -121,6 +122,8 @@ interface AgentAnswer {
   pages: string[];
   /** 真正复用了上一轮页面时才有的标记，用于决定回复里是否标注「承接」 */
   reusedPage?: string;
+  /** 实际执行过的工具调用（写进 AI 运营面板） */
+  toolCalls: AiChatToolCall[];
 }
 
 /** 一次 `searchPage` 的结果 */
@@ -138,6 +141,8 @@ interface ToolRunState {
   /** 已抓取的不同页面数（用于总量预算） */
   fetched: number;
   reusedPage?: string;
+  /** 实际执行过的工具调用（写进 AI 运营面板） */
+  toolCalls: AiChatToolCall[];
 }
 
 /** 轮数兜底：配置缺失/非法时回落到默认值，并限制在 1~8 之间 */
@@ -166,6 +171,8 @@ export class AiQueryCommands {
     database: { required: true },
     wikiBot: { required: false },
     http: { required: false },
+    /** AI 运营面板：缺失时只是不记录对话，不影响问答 */
+    aiInsights: { required: false },
   };
 
   private readonly config: AiQueryConfig;
@@ -254,6 +261,8 @@ export class AiQueryCommands {
             context.shared,
           );
           this.remember(session, keyword, result.answer, result.pages);
+          // 统计是旁路：写库/广播失败都不能影响用户拿回答
+          this.recordChat(session, keyword, result);
           // 只有真正沿用了上一轮的页面才标注「承接」，独立检索到新页面时不标注，
           // 否则用户会以为这一问还在聊上一轮的对象。
           return this.renderAnswer(
@@ -350,6 +359,7 @@ export class AiQueryCommands {
       pages: [],
       fetched: 0,
       reusedPage: undefined,
+      toolCalls: [],
     };
     const maxRounds = clampRounds(this.config.aiMaxToolRounds);
     let forcedSearch = false;
@@ -472,6 +482,12 @@ export class AiQueryCommands {
       }
 
       const page = await this.searchPage(keyword, turns);
+      const record: AiChatToolCall = {
+        name: call.name || SEARCH_TOOL_NAME,
+        keyword,
+      };
+      state.toolCalls.push(record);
+
       if (!page) {
         messages.push({
           role: "tool",
@@ -480,6 +496,7 @@ export class AiQueryCommands {
         });
         continue;
       }
+      record.page = page.title;
 
       // 同一页面重复检索：不再重复灌一遍正文，省 token 也避免模型以为拿到了新资料
       if (state.pages.includes(page.title)) {
@@ -529,6 +546,7 @@ export class AiQueryCommands {
       sources: state.sources,
       pages: state.pages,
       reusedPage: state.reusedPage,
+      toolCalls: state.toolCalls,
     };
   }
 
@@ -813,6 +831,29 @@ export class AiQueryCommands {
     }
 
     void this.persistMemory(session);
+  }
+
+  /**
+   * 写一条 AI 运营面板的对话记录。
+   *
+   * 只做旁路观测：`aiInsights` 未注册（例如单独启用了问答子插件）或写失败，
+   * 都只是少一条统计，不影响回复。
+   */
+  private recordChat(
+    session: Session | undefined,
+    question: string,
+    result: AgentAnswer,
+  ): void {
+    const insights = this.ctx.aiInsights;
+    if (!insights) return;
+
+    insights.record({
+      userId: session?.userId ?? "",
+      userName: session?.author?.name || session?.username || "",
+      question,
+      answer: result.answer,
+      toolCalls: result.toolCalls,
+    });
   }
 
   /** 从数据库读取一次记忆（重启后内存为空时使用） */
