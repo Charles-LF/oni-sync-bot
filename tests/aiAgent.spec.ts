@@ -798,3 +798,112 @@ describe("interface/aiQueryCommands 多人群聊隔离", () => {
     assert.ok(assistant.content.length <= 201, `实际 ${assistant.content.length} 字`);
   });
 });
+
+describe("interface/aiQueryCommands 防幻觉闸门", () => {
+  const BAD_ANSWER = [
+    "**满载油井：**",
+    "- 原油：3.33333 千克/秒",
+    "- 天然气：33.3 克/秒",
+    "**精炼器：**",
+    "- 石油：3.33333 × 50% = 1.667 千克/秒",
+    "- 天然气：3.33333 × 0.9% = 30 克/秒",
+    "精炼器：原油 50% 变石油、9% 变天然气。",
+  ].join("\n");
+
+  const FIXED_ANSWER =
+    "满载油井产出 3.33333 千克/秒原油，精炼器按 90 克/秒 ÷ 10 千克/秒 = 0.9% 副产天然气，" +
+    "折算为 30 克/秒，加上油井自身 33.3 克/秒，合计约 63.3 克/秒。";
+
+  it("只查了一个词条就说「无法计算」，会先被推去换词条再查一次", async () => {
+    const { plugin, completeCalls, fetched } = createPlugin({
+      decisions: [
+        plan([toolCall("c1", "原油精炼器")]),
+        final("**结论：缺少油井产油速率，无法得出「够几台炼油」的数值。**"),
+        plan([toolCall("c2", "油井")]),
+        final("满载油井产出 3.33333 千克/秒原油。"),
+      ],
+      pages: { 原油精炼器: "精炼器正文", 油井: "油井正文" },
+      pageList: ["原油精炼器", "油井"],
+    });
+
+    const result = await plugin.runAgent("满载油井够几台炼油");
+
+    assert.deepEqual(fetched, ["原油精炼器", "油井"]);
+    assert.equal(completeCalls.length, 4);
+    assert.equal(result.answer, "满载油井产出 3.33333 千克/秒原油。");
+    const nudge = completeCalls[2].messages.find(
+      (m: AgentMessage) => m.role === "system" && String(m.content).includes("还有词条没有查"),
+    );
+    assert.ok(nudge, "应追加「不要半路放弃」的提示");
+  });
+
+  it("同一回答里 0.9% 与 9% 并存时，用资料复核后改写", async () => {
+    const { plugin, completeCalls } = createPlugin({
+      decisions: [
+        plan([toolCall("c1", "油井")]),
+        final(BAD_ANSWER),
+        final(`FIX\n${FIXED_ANSWER}`),
+      ],
+      pages: { 油井: "油井正文：3.33333 千克/秒原油" },
+      pageList: ["油井"],
+    });
+
+    const result = await plugin.runAgent("满载油井出什么");
+
+    assert.equal(result.answer, FIXED_ANSWER);
+    assert.equal(completeCalls.length, 3);
+    const verifyCall = completeCalls[2];
+    assert.equal(verifyCall.opts.temperature, 0, "复核同样要确定性");
+    assert.ok(
+      verifyCall.messages.some(
+        (m: AgentMessage) =>
+          m.role === "system" && String(m.content).includes("数值校对员"),
+      ),
+    );
+    const userMessage = verifyCall.messages.find(
+      (m: AgentMessage) => m.role === "user",
+    ) as { content: string };
+    assert.ok(userMessage.content.includes("相差 10 倍"), "要把预检疑点告诉复核");
+    assert.ok(userMessage.content.includes("油井正文"), "复核要看资料原文");
+  });
+
+  it("关掉 aiSelfCheck 后不再做常规复核，但预检发现矛盾仍会复核", async () => {
+    const { plugin: plain, completeCalls: plainCalls } = createPlugin({
+      decisions: [plan([toolCall("c1", "电解器")]), final("500 ÷ 2 = 250 克/秒。")],
+      pages: { 电解器: "电解器正文" },
+      pageList: ["电解器"],
+    });
+    plain.config.aiSelfCheck = false;
+    await plain.runAgent("电解器产氧多少");
+    assert.equal(plainCalls.length, 2, "没有预检疑点时不该多花一次调用");
+
+    const { plugin: conflict, completeCalls: conflictCalls } = createPlugin({
+      decisions: [
+        plan([toolCall("c1", "油井")]),
+        final(BAD_ANSWER),
+        final(`FIX\n${FIXED_ANSWER}`),
+      ],
+      pages: { 油井: "油井正文" },
+      pageList: ["油井"],
+    });
+    conflict.config.aiSelfCheck = false;
+    const result = await conflict.runAgent("满载油井出什么");
+    assert.equal(conflictCalls.length, 3, "预检疑点必须强制复核");
+    assert.equal(result.answer, FIXED_ANSWER);
+  });
+
+  it("复核调用失败时沿用原稿，不会把回答搞丢", async () => {
+    const { plugin } = createPlugin({
+      decisions: [
+        plan([toolCall("c1", "油井")]),
+        final(BAD_ANSWER),
+        // 复核那一次没有 decision → 假 complete 会抛错
+      ],
+      pages: { 油井: "油井正文" },
+      pageList: ["油井"],
+    });
+
+    const result = await plugin.runAgent("满载油井出什么");
+    assert.equal(result.answer, BAD_ANSWER);
+  });
+});

@@ -11,6 +11,14 @@ import {
   type ToolDefinition,
 } from "../infrastructure/ai/aiService";
 import { AiMemory, pickContext, type MemoryTurn } from "../application/ai/aiMemory";
+import {
+  VERIFY_SYSTEM_PROMPT,
+  buildVerifyMessage,
+  detectPercentConflicts,
+  looksIncomplete,
+  needsNumericCheck,
+  pickRevision,
+} from "../domain/ai/answerGuard";
 import { MessageRenderer } from "./messageRenderer";
 import { generatePinyinInfo, getErrorMessage, siteUrl } from "../utils/tools";
 import { findFuzzyMatches } from "../utils/matcher";
@@ -28,6 +36,14 @@ const MAX_TOOL_CALLS_PER_ROUND = 2;
 
 /** 单次问答累计最多抓取多少个不同页面，防止模型无限发散 */
 const MAX_PAGES_PER_QUESTION = 6;
+
+/** 模型想用「资料未提及」收场时追加的提示：逼它换更基础的词条再查一次 */
+const INCOMPLETE_NUDGE_PROMPT = [
+  "你准备用「资料未提及 / 无法计算」收场，但看起来还有词条没有查。",
+  "请先确认：问题里的每个名词都检索过了吗？关键数值（产出速率、消耗量、转化比例）是否真的不在资料里？",
+  "如果没查到，请换**更基础的词条**再调用一次工具（例如没查到产油速率就查「储油石」「原油」；没查到耗氧量就查「复制人」）。",
+  "只有把所有相关词条都查过、确实无法推导时，才允许回答「资料中未提及」。",
+].join("\n");
 
 /** 兜底轮数：配置缺失或非法时使用 */
 const DEFAULT_MAX_TOOL_ROUNDS = 5;
@@ -143,6 +159,8 @@ interface ToolRunState {
   reusedPage?: string;
   /** 实际执行过的工具调用（写进 AI 运营面板） */
   toolCalls: AiChatToolCall[];
+  /** 已抓取页面的正文（数值复核要用原文核对） */
+  texts: string[];
 }
 
 /** 轮数兜底：配置缺失/非法时回落到默认值，并限制在 1~8 之间 */
@@ -360,9 +378,12 @@ export class AiQueryCommands {
       fetched: 0,
       reusedPage: undefined,
       toolCalls: [],
+      texts: [],
     };
     const maxRounds = clampRounds(this.config.aiMaxToolRounds);
     let forcedSearch = false;
+    /** 「资料不足」的收场白只纠正一次，避免模型被反复推着空转 */
+    let nudgedIncomplete = false;
 
     for (let round = 1; round <= maxRounds; round++) {
       const isLast = round === maxRounds;
@@ -410,6 +431,22 @@ export class AiQueryCommands {
       }
 
       if (decision.toolCalls.length === 0) {
+        // 只查了一两个词条就说「资料未提及 / 无法计算」：多半是漏查，推它换词条再搜一次。
+        // 同一个问题只纠正一次，最后一轮也不再打断（收尾提示词已经要求直接作答）。
+        if (
+          !isLast &&
+          !nudgedIncomplete &&
+          state.fetched > 0 &&
+          looksIncomplete(decision.content)
+        ) {
+          nudgedIncomplete = true;
+          this.log.info(
+            `[ai] 回答疑似漏查（已查：${state.pages.join("、")}），追加一次检索提示`,
+          );
+          messages.push(decision.message);
+          messages.push({ role: "system", content: INCOMPLETE_NUDGE_PROMPT });
+          continue;
+        }
         // 模型自己决定收尾：这一轮的内容就是答案
         return this.finalize(question, decision.content, state, state.fetched > 0);
       }
@@ -512,6 +549,7 @@ export class AiQueryCommands {
       state.fetched += 1;
       state.pages.push(page.title);
       state.sources.push({ title: page.title, url: this.pageUrl(page.title) });
+      state.texts.push(`【${page.title}】\n${page.text}`);
       if (page.reused) state.reusedPage = page.title;
 
       messages.push({
@@ -524,14 +562,15 @@ export class AiQueryCommands {
     return messages;
   }
 
-  /** 统一收尾日志与返回结构 */
-  private finalize(
+  /** 统一收尾日志与返回结构（顺带做一次数值复核） */
+  private async finalize(
     question: string,
     content: string,
     state: ToolRunState,
     grounded: boolean,
-  ): AgentAnswer {
-    const answer = content?.trim() || NO_ANSWER_TEXT;
+  ): Promise<AgentAnswer> {
+    const draft = content?.trim() || NO_ANSWER_TEXT;
+    const answer = await this.verifyAnswer(question, draft, state);
     if (!grounded) {
       this.log.warn(
         `[ai] 「${question}」没有产生检索调用，直接采用模型回答（可能不含资料支撑）`,
@@ -548,6 +587,58 @@ export class AiQueryCommands {
       reusedPage: state.reusedPage,
       toolCalls: state.toolCalls,
     };
+  }
+
+  /**
+   * 数值复核（防幻觉的最后一道闸）。
+   *
+   * 命中两类情况才会多花一次模型调用：
+   * 1. 程序预检发现「同一份回答里出现相差 10 倍的百分比」（0.9% 写成 9% 的典型指纹）；
+   * 2. 开了 `aiSelfCheck` 且回答里含有推导（百分比 / 算式 / 3 个以上数字）。
+   *
+   * 复核用的资料就是本次真正抓到的正文，所以它能判「这个数到底有没有出处」。
+   * 任何异常都返回原稿——宁可少改一次，也不能把回答搞丢。
+   */
+  private async verifyAnswer(
+    question: string,
+    draft: string,
+    state: ToolRunState,
+  ): Promise<string> {
+    if (isNoAnswer(draft) || state.texts.length === 0) return draft;
+
+    const issues = detectPercentConflicts(draft);
+    const selfCheck = this.config.aiSelfCheck !== false;
+    if (!selfCheck && issues.length === 0) return draft;
+    if (issues.length === 0 && !needsNumericCheck(draft)) return draft;
+
+    try {
+      const result = await this.ai.complete(
+        [
+          { role: "system", content: VERIFY_SYSTEM_PROMPT },
+          {
+            role: "user",
+            content: buildVerifyMessage(
+              question,
+              state.texts.join("\n\n"),
+              draft,
+              issues.map((issue) => issue.message),
+            ),
+          },
+        ],
+        { temperature: 0, maxTokens: this.config.aiMaxTokens },
+      );
+
+      const final = pickRevision(draft, result.content);
+      if (final !== draft) {
+        this.log.info(
+          `[ai] 数值复核改写了回答（预检疑点 ${issues.length} 处）`,
+        );
+      }
+      return final;
+    } catch (error) {
+      this.log.warn(`[ai] 数值复核失败，沿用原回答：${getErrorMessage(error)}`);
+      return draft;
+    }
   }
 
   /**

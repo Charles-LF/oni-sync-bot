@@ -145,6 +145,8 @@ export interface AiConfig {
   aiCodeBlockMinChars: number;
   /** 单次问答最多允许多少轮工具调用（防死循环） */
   aiMaxToolRounds: number;
+  /** 回答前是否再做一次数值复核（拿资料重核百分比与算式） */
+  aiSelfCheck: boolean;
   /** AI 对话日志保留条数（AI 运营面板的数据源） */
   aiChatLogLimit: number;
 }
@@ -162,8 +164,10 @@ export const AiConfig: Schema<AiConfig> = Schema.object({
     .description("使用的模型")
     .default("deepseek-chat"),
   aiTemperature: Schema.number()
-    .description("采样温度，越低越保守（防幻觉建议 0~0.3）")
-    .default(0.2)
+    .description(
+      "采样温度，越低越保守。默认 0 = 同一个问题每次都走同样的检索与推导，避免两次答案自相矛盾",
+    )
+    .default(0)
     .min(0)
     .max(2),
   aiMaxTokens: Schema.natural()
@@ -203,6 +207,11 @@ export const AiConfig: Schema<AiConfig> = Schema.object({
     .default(5)
     .min(1)
     .max(8),
+  aiSelfCheck: Schema.boolean()
+    .description(
+      "回答生成后再做一次数值复核：用资料重新核对百分比换算与算式，发现矛盾就重写（多一次模型调用）",
+    )
+    .default(true),
   aiChatLogLimit: Schema.natural()
     .description(
       "AI 对话日志保留条数，超出后自动删除最早的记录（控制台「AI 运营面板」的数据源）",
