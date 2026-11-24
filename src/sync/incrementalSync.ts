@@ -42,7 +42,7 @@ const DEFAULT_OPTIONS: IncrementalSyncOptions = {
   fileNamespacePrefix: "File:",
   defaultUser: "同步坤器人",
   maxLogRecords: 5000,
-  fallbackHours: 3,
+  fallbackHours: 24,
   overlapMs: 10_000,
   maxPagesPerRun: 300,
   maxImagesPerRun: 100,
@@ -123,14 +123,45 @@ export async function runIncrementalSync(
   const startedAt = Date.now();
   const now = new Date();
   const lastSync = deps.repo.getLastSyncTime();
-  const from = new Date(
-    lastSync !== undefined
-      ? lastSync - opts.overlapMs
-      : now.getTime() - opts.fallbackHours * 3600_000,
-  );
+  const fallbackFrom = now.getTime() - opts.fallbackHours * 3600_000;
 
-  // 水位比「现在」还新（时钟回拨 / 手改配置）时，回溯到 fallback 窗口，避免空转
-  const effectiveFrom = from.getTime() > now.getTime() ? new Date(now.getTime() - opts.fallbackHours * 3600_000) : from;
+  if (lastSync === undefined) {
+    logger.warn(
+      `[增量更新流程] 没有同步水位，本轮只回溯 ${opts.fallbackHours} 小时` +
+        `（更早的变更请用「全量同步页面」补齐）`,
+    );
+  }
+
+  // 水位缺失 / 比现在更新（时钟回拨、手改配置）时退回回溯窗口，避免空转
+  let windowStart =
+    lastSync !== undefined && lastSync <= now.getTime()
+      ? lastSync - opts.overlapMs
+      : fallbackFrom;
+
+  // 水位体检：水位必须 ≥ 已入库记录里最新的一条，否则说明中间那段变更从没被拉过
+  // （典型场景：旧版本首次运行只回溯几小时就把水位推到 now）。探一下空隙，
+  // 确实有变更就把窗口拉回记录处，宁可重复拉取也不能永久漏更。
+  // 探测下界要比记录新 1 秒：MediaWiki 时间戳只到秒，已入库的那条正好压在下界上，
+  // 包含进来会造成「每轮都自愈」的假阳性。
+  const newestStored = await deps.repo.getNewestChangeTime();
+  if (newestStored !== undefined && newestStored + opts.overlapMs < windowStart) {
+    const probeEnd = new Date(windowStart + opts.overlapMs);
+    const missed = await hasChangesBetween(
+      deps.source,
+      new Date(newestStored + 1000),
+      probeEnd,
+    );
+    if (missed) {
+      logger.warn(
+        `[增量更新流程] ⚠️ 水位 ${new Date(windowStart + opts.overlapMs).toISOString()} ` +
+          `超前于已入库的最新记录 ${new Date(newestStored).toISOString()}，` +
+          `空隙中存在未同步的变更，本轮窗口回退到 ${new Date(newestStored).toISOString()} 补齐`,
+      );
+      windowStart = newestStored - opts.overlapMs;
+    }
+  }
+
+  const effectiveFrom = new Date(windowStart);
 
   logger.info(
     `[增量更新流程] ⏰ 同步区间 ${effectiveFrom.toISOString()} → ${now.toISOString()}` +
@@ -220,6 +251,23 @@ export async function runIncrementalSync(
   logger.info(
     `[增量更新流程] 📥 拉取完成：${changes} 条变更 / ${titles.size} 个页面（新入库 ${stored} 条）`,
   );
+
+  if (changes === 0) {
+    // 0 条时把源站的最新变更打出来：要么确实没新编辑，要么被 ns/type 过滤掉了，
+    // 两种情况日志里一眼能分清，不用再去猜水位。
+    const newest = await getNewestChange(deps.source);
+    if (newest && Date.parse(newest.timestamp) > windowStart) {
+      logger.warn(
+        `[增量更新流程] ⚠️ 本轮窗口内 0 条变更，但源站最新变更「${newest.title}」在 ` +
+          `${newest.timestamp}（晚于窗口起点），该变更被命名空间/类型过滤排除了`,
+      );
+    } else {
+      logger.info(
+        `[增量更新流程] 本轮窗口内没有新变更` +
+          (newest ? `（源站最新：${newest.timestamp}「${newest.title}」）` : ""),
+      );
+    }
+  }
 
   // ------------------------------------------------------------ 同步页面
   const allTitles = [...titles.keys()];
@@ -318,6 +366,10 @@ export async function runIncrementalSync(
     synced += imageResult.synced;
     skipped += imageResult.skipped;
     failed += imageResult.failed;
+    // 图片也要通知：不然「本轮只更新了图片」时群里一条消息都收不到
+    for (const item of imageResult.syncedItems) {
+      syncedItems.push({ title: item.title, type: "image", timestamp: item.timestamp });
+    }
   }
 
   // -------------------------------------------------------- 推进水位 / 收尾
@@ -378,6 +430,8 @@ interface ImagePassResult {
   synced: number;
   skipped: number;
   failed: number;
+  /** 本轮真正转存成功的图片，用于群通知 */
+  syncedItems: Array<{ title: string; timestamp: string }>;
 }
 
 /**
@@ -399,7 +453,7 @@ async function runImagePass(
 
   if (remote.size === 0) {
     logger.warn("[增量更新流程] 图片索引获取失败或源站无图片，跳过图片检查");
-    return { checked: 0, synced: 0, skipped: 0, failed: 0 };
+    return { checked: 0, synced: 0, skipped: 0, failed: 0, syncedItems: [] };
   }
 
   const pending: string[] = [];
@@ -416,13 +470,14 @@ async function runImagePass(
   );
 
   if (pending.length === 0) {
-    return { checked: remote.size, synced: 0, skipped: 0, failed: 0 };
+    return { checked: remote.size, synced: 0, skipped: 0, failed: 0, syncedItems: [] };
   }
 
   const target = pending.slice(0, opts.maxImagesPerRun);
   let synced = 0;
   let skipped = 0;
   let failed = 0;
+  const syncedItems: Array<{ title: string; timestamp: string }> = [];
 
   for (let i = 0; i < target.length; i += IMAGE_INFO_BATCH) {
     await token.checkpoint();
@@ -442,8 +497,15 @@ async function runImagePass(
       try {
         const result = await deps.images.syncOne(stripImagePrefix(title));
         if (result.success) {
-          if (result.reason === "synced") synced++;
-          else skipped++;
+          if (result.reason === "synced") {
+            synced++;
+            syncedItems.push({
+              title: stripImagePrefix(title),
+              timestamp: meta.timestamp || remote.get(title) || "",
+            });
+          } else {
+            skipped++;
+          }
           await deps.repo.upsertImages([
             {
               title,
@@ -454,6 +516,9 @@ async function runImagePass(
           ]);
         } else {
           failed++;
+          logger.warn(
+            `[增量更新流程] ❌ 图片 ${stripImagePrefix(title)} 同步失败：${result.reason ?? "未知原因"}`,
+          );
         }
       } catch (error) {
         failed++;
@@ -475,7 +540,62 @@ async function runImagePass(
     }
   }
 
-  return { checked: remote.size, synced, skipped, failed };
+  return { checked: remote.size, synced, skipped, failed, syncedItems };
+}
+
+/**
+ * 浅探测「水位」与「已入库最新记录」之间的空隙里有没有漏掉的变更。
+ * 只要 1 条即可判定，请求本身很轻；失败时按「没有漏更」处理，不影响主流程。
+ */
+async function hasChangesBetween(
+  source: Mwn,
+  start: Date,
+  end: Date,
+): Promise<boolean> {
+  const items = await queryRecentChanges(source, {
+    rcstart: start.toISOString(),
+    rcend: end.toISOString(),
+    rclimit: 1,
+    rcprop: "title|timestamp",
+  });
+  return items.length > 0;
+}
+
+/** 源站最新的一条主命名空间编辑（只用于诊断日志） */
+async function getNewestChange(
+  source: Mwn,
+): Promise<{ title?: string; timestamp: string } | undefined> {
+  const items = await queryRecentChanges(source, {
+    rcdir: "older",
+    rclimit: 1,
+    rcprop: "title|timestamp",
+  });
+  return items[0] as { title?: string; timestamp: string } | undefined;
+}
+
+/** recentchanges 的公共参数集中在这里，保证诊断查询与主查询口径一致 */
+async function queryRecentChanges(
+  source: Mwn,
+  extra: Record<string, unknown>,
+): Promise<Array<Record<string, unknown>>> {
+  try {
+    const res = await source.request({
+      action: "query",
+      format: "json",
+      formatversion: "2",
+      list: "recentchanges",
+      rcdir: "newer",
+      rctype: "edit|new",
+      rcnamespace: 0,
+      ...extra,
+    });
+    return (res?.query?.recentchanges ?? []) as Array<Record<string, unknown>>;
+  } catch (error) {
+    logger.warn(
+      `[增量更新流程] 查询最近更改失败（按无漏更处理）：${getErrorMessage(error)}`,
+    );
+    return [];
+  }
 }
 
 /** 列出源站全部图片及其时间戳（只有标题与时间，很轻） */

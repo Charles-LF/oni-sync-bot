@@ -184,6 +184,24 @@ export class SyncRepository {
     return { entries, total: totalAll, totalAll };
   }
 
+  /**
+   * 已入库记录里最新一条的时间（毫秒）。
+   *
+   * 用来给水位做体检：正常情况下水位一定 ≥ 这个值；
+   * 水位比它还新说明中间有变更从没被拉取过（旧水位被误推进），增量同步需要把窗口拉回来。
+   */
+  async getNewestChangeTime(): Promise<number | undefined> {
+    const rows = await this.ctx.database.get("sync_logs", {}, {
+      fields: ["timestamp"],
+      sort: { timestamp: "desc" },
+      limit: 1,
+    });
+    const raw = rows[0]?.timestamp;
+    if (!raw) return undefined;
+    const time = Date.parse(raw);
+    return Number.isFinite(time) ? time : undefined;
+  }
+
   /** 单条详情（含已缓存的 diff） */
   async getChange(id: string): Promise<SyncLogRow | undefined> {
     const rows = await this.ctx.database.get("sync_logs", { id });

@@ -19,7 +19,8 @@
 - **图片同步** — 下载原站图片并上传到 bwiki，支持 SHA1 比对跳过与旧版本清理
 - **贡献者同步** — 单页 / 全量同步贡献者与最后修改时间
 - **增量同步（默认调度）** — 基于**持久化水位**的变更检测：只处理上次成功之后新产生的编辑，
-  页面走 `recentchanges`、图片走 `allimages + imageinfo` 指纹比对，不再每小时盲目回溯固定窗口
+  页面走 `recentchanges`、图片走 `allimages + imageinfo` 指纹比对，不再每小时盲目回溯固定窗口；
+  水位会定期做体检，发现「水位越过本地记录」的空隙会自动回退补齐，杜绝永久漏更
 
 ### ⚙️ 同步运维面板（控制台首页 `/`）
 
@@ -119,7 +120,7 @@ npm uninstall vectra @huggingface/transformers   # 0.12.0 起不再需要
 | `syncMaxPagesPerRun`  | 增量同步 | 单轮最多同步的页面数，超出部分由水位游标留到下一轮      | `300`                          |
 | `syncMaxImagesPerRun` | 增量同步 | 单轮最多同步的图片数                                    | `100`                          |
 | `syncOverlapSeconds`  | 增量同步 | 拉取起始时间向前偏移的秒数（抵消 MediaWiki 写入延迟）   | `10`                           |
-| `syncFallbackHours`   | 增量同步 | 首次运行（尚无水位）时向前回溯的小时数                  | `3`                            |
+| `syncFallbackHours`   | 增量同步 | 首次运行（尚无水位）时向前回溯的小时数                  | `24`                           |
 
 ### 🤖 AI 相关配置
 
@@ -250,18 +251,26 @@ npm uninstall vectra @huggingface/transformers   # 0.12.0 起不再需要
 
 #### 增量同步是怎么跑的
 
-1. **水位**：`sync_config.last_sync_time` 记录**上次完整跑完**的时间；首次运行没有水位时回溯 `syncFallbackHours`（默认 3 小时）。
-2. **拉页面变更**：`list=recentchanges`，区间 `[水位 - 10 秒, 现在]`，正序（旧→新），
+1. **水位**：`sync_config.last_sync_time` 记录**上次完整跑完**的时间；首次运行没有水位时回溯 `syncFallbackHours`（默认 24 小时）。
+2. **水位体检（自动补漏）**：水位必须 ≥ `sync_logs` 里最新一条记录的时间。
+   如果水位反而更靠后（历史 bug 把水位推到了「现在」、时钟回拨、手改配置），
+   会先在 `(记录时间, 水位]` 这段空隙里浅探 1 条变更：**确实有漏更就把窗口回退到记录处补齐**。
+   这样「水位跳过一段没人拉过的区间」这种永久漏更不可能再发生。
+3. **拉页面变更**：`list=recentchanges`，区间 `[窗口起点, 现在]`，正序（旧→新），
    只取 `rcnamespace=0` 且 `rctype=edit|new`（排除非主命名空间与删除日志）。
    向前偏移 10 秒（`syncOverlapSeconds`）是为了抵消 MediaWiki 的写入延迟，宁可重复也不漏。
-3. **记录最近更改**：每条变更按 `rcid` 去重写入 `sync_logs`（同页多次编辑只同步一次页面，但记录都保留），
+   本轮 0 条时会把**源站最新一条变更**打出来，方便区分「确实没人编辑」和「被命名空间/类型过滤掉」。
+4. **记录最近更改**：每条变更按 `rcid` 去重写入 `sync_logs`（同页多次编辑只同步一次页面，但记录都保留），
    超过 `syncLogLimit` 时自动裁掉最旧的。
-4. **同步页面**：去重后的标题逐个走原有的 `PageSyncer.syncOne()`（内容相同会直接跳过），顺带补 `wikipages` 与贡献者。
-5. **同步图片**：图片不进 `recentchanges`，所以先用 `list=allimages&aiprop=timestamp` 拿一份轻量索引，
+5. **同步页面**：去重后的标题逐个走原有的 `PageSyncer.syncOne()`（内容相同会直接跳过），顺带补 `wikipages` 与贡献者。
+6. **同步图片**：图片不进 `recentchanges`，所以先用 `list=allimages&aiprop=timestamp` 拿一份轻量索引，
    与 `sync_images` 指纹比对找出「新图片 / 时间戳变了」的，再用 `prop=imageinfo`（50 个一批）确认，逐个走 `ImageSyncer.syncOne()`。
-6. **推进水位**：跑完 → 水位 = 本轮结束时间；
+7. **推进水位**：跑完 → 水位 = 本轮结束时间；
    若被 `syncMaxPagesPerRun` 截断 → 水位停在「最后处理页面的最早一次编辑」这个游标上，下一轮从那里继续。
    中途**暂停/停止**不推进水位（下次重跑这段区间，靠 rcid 去重与内容比对几乎零成本）。
+
+> **群通知**：页面与图片的**成功同步**会合并成一条消息推到 `notifyGroupIds`（图片以 `🖼️` 标记、只标时间）。
+> 「内容相同跳过」不算同步成功，不会推送，避免刷屏。
 
 #### 任务优先级与并发
 

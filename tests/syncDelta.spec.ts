@@ -358,6 +358,35 @@ describe("services/syncRepository", () => {
     await reloaded.loadConfig();
     assert.equal(reloaded.getLastSyncTime(), Date.parse("2024-05-01T12:00:00.000Z"));
   });
+
+  it("能查出入库记录里最新一条的时间（水位体检用）", async () => {
+    const { repo } = createRepo();
+    assert.equal(await repo.getNewestChangeTime(), undefined, "空表返回 undefined");
+
+    await repo.saveChanges([
+      {
+        id: "1",
+        title: "电解器",
+        user: "A",
+        timestamp: "2024-05-01T09:00:00Z",
+        comment: "",
+        sizeDiff: 0,
+      },
+      {
+        id: "2",
+        title: "水泵",
+        user: "B",
+        timestamp: "2024-05-02T09:00:00Z",
+        comment: "",
+        sizeDiff: 0,
+      },
+    ]);
+
+    assert.equal(
+      await repo.getNewestChangeTime(),
+      Date.parse("2024-05-02T09:00:00Z"),
+    );
+  });
 });
 
 describe("sync/incrementalSync 增量同步", () => {
@@ -374,6 +403,10 @@ describe("sync/incrementalSync 增量同步", () => {
     images?: any[];
     lastSync?: number;
     onPage?: (title: string) => void;
+    /** 水位体检（空隙探测）返回的变更，默认空 = 没有漏更 */
+    gapProbe?: any[];
+    /** 0 条变更时诊断用：源站最新的一条变更 */
+    newestChange?: any;
   } = {}) {
     const harness: Harness = {
       calls: [],
@@ -400,8 +433,18 @@ describe("sync/incrementalSync 增量同步", () => {
           yield { query: payload };
         })();
       },
-      // 模拟 prop=imageinfo 的批量查询
+      // 模拟 prop=imageinfo 的批量查询 + 水位体检 / 最新变更诊断
       async request(params: any) {
+        if (params.list === "recentchanges") {
+          const isNewest = params.rcdir === "older";
+          harness.calls.push({ list: isNewest ? "newest" : "probe", params });
+          const items = isNewest
+            ? options.newestChange
+              ? [options.newestChange]
+              : []
+            : options.gapProbe ?? [];
+          return { query: { recentchanges: items } };
+        }
         const titles = String(params.titles ?? "").split("|").filter(Boolean);
         return {
           query: {
@@ -525,7 +568,7 @@ describe("sync/incrementalSync 增量同步", () => {
     assert.ok(watermark >= before && watermark <= after + 1000);
   });
 
-  it("首次运行（无水位）回溯默认 3 小时", async () => {
+  it("首次运行（无水位）回溯默认 24 小时", async () => {
     const engine = createEngine({ changes: [] });
     await runIncrementalSync(
       { ...(engine as any), target: engine.source, repo: engine.repo },
@@ -537,7 +580,97 @@ describe("sync/incrementalSync 增量同步", () => {
     const rc = engine.harness.calls.find((call) => call.list === "recentchanges")!;
     const span =
       Date.parse(rc.params.rcend) - Date.parse(rc.params.rcstart);
-    assert.ok(Math.abs(span - 3 * 3600_000) < 5000, `回溯区间应约等于 3 小时，实际 ${span}ms`);
+    assert.ok(Math.abs(span - 24 * 3600_000) < 5000, `回溯区间应约等于 24 小时，实际 ${span}ms`);
+  });
+
+  it("水位超前于入库记录且空隙里有变更时，窗口回退到记录处补齐", async () => {
+    const lastSync = Date.parse("2024-05-01T10:05:00Z");
+    // 入库记录停在 09:00，水位却已经推到 10:05：中间那段从没被拉过
+    const engine = createEngine({
+      changes,
+      lastSync,
+      gapProbe: [{ title: "水泵", timestamp: "2024-05-01T09:30:00Z" }],
+    });
+    await engine.repo.saveChanges([
+      {
+        id: "9",
+        title: "电解器",
+        user: "A",
+        timestamp: "2024-05-01T09:00:00Z",
+        comment: "",
+        sizeDiff: 1,
+      },
+    ]);
+
+    await runIncrementalSync(
+      { ...(engine as any), target: engine.source, repo: engine.repo },
+      new RunToken(),
+      () => {},
+      { checkImages: false },
+    );
+
+    const rc = engine.harness.calls.find((call) => call.list === "recentchanges")!;
+    assert.equal(
+      Date.parse(rc.params.rcstart),
+      Date.parse("2024-05-01T09:00:00Z") - 10_000,
+      "窗口必须回退到已入库的最新记录（再向前偏移 10 秒）",
+    );
+    assert.deepEqual(engine.harness.syncedTitles, ["电解器", "水泵"]);
+
+    // 探测下界要比记录新 1 秒，否则已入库的那条会一直触发假阳性
+    const probe = engine.harness.calls.find((call) => call.list === "probe")!;
+    assert.equal(
+      Date.parse(probe.params.rcstart),
+      Date.parse("2024-05-01T09:00:00Z") + 1000,
+    );
+    assert.equal(Date.parse(probe.params.rcend), lastSync);
+  });
+
+  it("空隙里确实没有变更时不回退窗口", async () => {
+    const lastSync = Date.parse("2024-05-01T10:05:00Z");
+    const engine = createEngine({ changes: [], lastSync, gapProbe: [] });
+    await engine.repo.saveChanges([
+      {
+        id: "9",
+        title: "电解器",
+        user: "A",
+        timestamp: "2024-05-01T09:00:00Z",
+        comment: "",
+        sizeDiff: 1,
+      },
+    ]);
+
+    await runIncrementalSync(
+      { ...(engine as any), target: engine.source, repo: engine.repo },
+      new RunToken(),
+      () => {},
+      { checkImages: false },
+    );
+
+    const rc = engine.harness.calls.find((call) => call.list === "recentchanges")!;
+    assert.equal(Date.parse(rc.params.rcstart), lastSync - 10_000);
+  });
+
+  it("没有入库记录可参照时不做窗口回退", async () => {
+    const engine = createEngine({
+      changes: [],
+      lastSync: Date.parse("2024-05-01T10:05:00Z"),
+      gapProbe: [{ title: "x", timestamp: "2024-05-01T09:30:00Z" }],
+    });
+
+    await runIncrementalSync(
+      { ...(engine as any), target: engine.source, repo: engine.repo },
+      new RunToken(),
+      () => {},
+      { checkImages: false },
+    );
+
+    const rc = engine.harness.calls.find((call) => call.list === "recentchanges")!;
+    assert.equal(
+      Date.parse(rc.params.rcstart),
+      Date.parse("2024-05-01T10:05:00Z") - 10_000,
+      "没有记录可参照时不做回退",
+    );
   });
 
   it("页面数被 maxPagesPerRun 截断时，水位停在游标处而不是 now", async () => {
@@ -628,5 +761,47 @@ describe("sync/incrementalSync 增量同步", () => {
     const index = await engine.repo.loadImageIndex();
     assert.equal(index.get("File:C.png")?.timestamp, "2024-05-03T00:00:00Z");
     assert.ok((index.get("File:B.png")?.synced_at ?? 0) > 0);
+  });
+
+  it("只同步了图片时也要推出群通知（type=image）", async () => {
+    const engine = createEngine({
+      changes: [],
+      images: [{ title: "File:C.png", timestamp: "2024-05-03T00:00:00Z" }],
+    });
+
+    const notified: any[] = [];
+    const result = await runIncrementalSync(
+      {
+        ...(engine as any),
+        target: engine.source,
+        repo: engine.repo,
+        notify: (items) => notified.push(...items),
+      },
+      new RunToken(),
+      () => {},
+    );
+
+    assert.equal(result.pages, 0, "本轮没有页面变更");
+    assert.equal(result.imagesSynced, 1);
+    assert.deepEqual(notified, [
+      { title: "C.png", type: "image", timestamp: "2024-05-03T00:00:00Z" },
+    ]);
+  });
+
+  it("0 条变更时会记录源站最新变更，便于区分「确实没更新」与「被过滤」", async () => {
+    const engine = createEngine({
+      changes: [],
+      newestChange: { title: "玻璃", timestamp: "2024-05-01T09:30:00Z" },
+    });
+
+    const result = await runIncrementalSync(
+      { ...(engine as any), target: engine.source, repo: engine.repo },
+      new RunToken(),
+      () => {},
+      { checkImages: false },
+    );
+
+    assert.equal(result.changes, 0);
+    assert.equal(result.pages, 0);
   });
 });

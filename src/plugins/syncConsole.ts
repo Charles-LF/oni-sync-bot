@@ -306,7 +306,7 @@ export class SyncConsole {
         {
           maxLogRecords: this.config.syncLogLimit ?? 5000,
           overlapMs: Math.max(0, this.config.syncOverlapSeconds ?? 10) * 1000,
-          fallbackHours: Math.max(1, this.config.syncFallbackHours ?? 3),
+          fallbackHours: Math.max(1, this.config.syncFallbackHours ?? 24),
           maxPagesPerRun: Math.max(1, this.config.syncMaxPagesPerRun ?? 300),
           maxImagesPerRun: Math.max(1, this.config.syncMaxImagesPerRun ?? 100),
           checkImages: this.config.syncCheckImages ?? true,

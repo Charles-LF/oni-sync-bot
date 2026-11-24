@@ -124,6 +124,19 @@ export class PageSyncer {
         if (existing.length > 0) return;
 
         const { pinyin_full, pinyin_first } = generatePinyinInfo(title);
+        // 页面改名后 pageid 不变：先按主键找一次，直接改标题，
+        // 免得走 create 撞 UNIQUE 让驱动打一条吓人的报错日志
+        const byId = await database.get("wikipages", { id: pageId });
+        if (byId.length > 0) {
+          await database.set(
+            "wikipages",
+            { id: pageId },
+            { title, pinyin_full, pinyin_first },
+          );
+          logger.info(`[数据库初始化] ♻️ 页面 ${title} 已按 pageid 更新标题`);
+          return;
+        }
+
         try {
           await database.create("wikipages", {
             id: pageId,
@@ -133,7 +146,7 @@ export class PageSyncer {
           });
           logger.info(`[数据库初始化] ✅ 页面 ${title} 已添加到数据库`);
         } catch (err) {
-          // 页面改名后 pageid 不变：按主键覆盖标题，而不是让 UNIQUE 约束报错
+          // 兜底：上面两次查询之间被并发写入抢了主键
           await database.set(
             "wikipages",
             { id: pageId },

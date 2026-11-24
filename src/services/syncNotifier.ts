@@ -82,13 +82,17 @@ export class SyncNotifier {
     const lines: string[] = [`Wiki 同步更新（${items.length} 条）`, ""];
 
     items.forEach((item, index) => {
-      const label = item.type === "image" ? "🖼️" : "📖";
       const time = item.timestamp ? formatWikiTime(item.timestamp) : "";
+      if (item.type === "image") {
+        // 图片没有编辑者，只标时间，避免出现「未知｜」
+        lines.push(`🖼️ ${index + 1}. ${item.title}${time ? `｜${time}` : ""}`);
+        return;
+      }
       const user = item.user || "未知";
       const summary = truncateComment(item.comment || "", 10);
       const commentPart = summary ? `｜${summary}` : "";
       lines.push(
-        `${label} ${index + 1}. ${item.title}｜${user}｜${time}${commentPart}`,
+        `📖 ${index + 1}. ${item.title}｜${user}｜${time}${commentPart}`,
       );
     });
 

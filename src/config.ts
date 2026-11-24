@@ -81,15 +81,14 @@ export interface DeltaSyncConfig {
 
 export const DeltaSyncConfig: Schema<DeltaSyncConfig> = Schema.object({
   syncCron: Schema.string()
-    .description(
-      "增量同步 cron 表达式（默认每小时第 15 分）。可在控制台「同步运维」页动态修改",
-    )
+    .description("增量同步 cron 表达式（默认每小时第 15 分）")
     .default("15 * * * *"),
   syncLogLimit: Schema.natural()
     .description("最近更改记录的保留条数（控制台列表上限）")
     .default(5000)
     .min(200)
-    .max(50000),  syncCheckImages: Schema.boolean()
+    .max(50000),
+  syncCheckImages: Schema.boolean()
     .description("增量同步时一并比对图片（关闭则只同步页面）")
     .default(true),
   syncMaxPagesPerRun: Schema.natural()
@@ -107,10 +106,12 @@ export const DeltaSyncConfig: Schema<DeltaSyncConfig> = Schema.object({
     .default(10)
     .max(300),
   syncFallbackHours: Schema.natural()
-    .description("首次运行（无水位）时向前回溯的小时数")
-    .default(3)
+    .description(
+      "首次运行（还没有水位）时向前回溯的小时数；更早的变更需要「全量同步页面」补齐",
+    )
+    .default(24)
     .min(1)
-    .max(168),
+    .max(720),
 });
 
 /** DeepSeek 问答 */

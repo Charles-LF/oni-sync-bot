@@ -72,6 +72,30 @@ describe("sync 模块的依赖注入", () => {
       await syncer.ensurePage(1, "已有页面");
       assert.deepEqual(writes, []);
     });
+
+    it("pageid 已被别的标题占用时，先按主键改标题，不再走 create 撞 UNIQUE", async () => {
+      const writes: string[] = [];
+      const database = {
+        async get(_table: string, query: any) {
+          // 按标题查不到，按 pageid 查得到（页面被改过名）
+          return query.id === 4872 ? [{ id: 4872, title: "旧标题" }] : [];
+        },
+        async create() {
+          writes.push("create");
+        },
+        async set(_table: string, query: object, data: object) {
+          writes.push("set");
+          return { ...query, ...data };
+        },
+        async upsert() {
+          writes.push("upsert");
+          return {};
+        },
+      };
+      const syncer = new PageSyncer(fakeBot, fakeBot, { database: database as any });
+      await syncer.ensurePage(4872, "网孔砖");
+      assert.deepEqual(writes, ["set"]);
+    });
   });
 
   describe("ModuleSyncer", () => {
