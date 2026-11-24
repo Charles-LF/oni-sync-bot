@@ -100,7 +100,7 @@ npm uninstall vectra @huggingface/transformers   # 0.12.0 起不再需要
 - 任意适配器（可选；QQ 适配器才能看到 markdown 按钮效果）
 
 > **定时任务不依赖 `koishi-plugin-cron`**：插件内置了 `ctx.oniCron` 调度器
-> （`src/utils/cron.ts` + `src/services/cronScheduler.ts`），随插件一起加载。
+> （`src/utils/cron.ts` + `src/infrastructure/sync/cronScheduler.ts`），随插件一起加载。
 > 从旧版本升级时可以把 `koishi.yml` 里的 `cron:xxxxxxxx: {}` 删掉。
 
 ## ⚙️ 配置项
@@ -319,7 +319,7 @@ npm uninstall vectra @huggingface/transformers   # 0.12.0 起不再需要
 
 ## ⏰ 定时任务
 
-调度由插件内置的 `ctx.oniCron`（`src/services/cronScheduler.ts`）负责，**不再依赖 `koishi-plugin-cron`**。
+调度由插件内置的 `ctx.oniCron`（`src/infrastructure/sync/cronScheduler.ts`）负责，**不再依赖 `koishi-plugin-cron`**。
 表达式支持 5 段（分 时 日 月 周）与 6 段（秒 分 时 日 月 周，兼容旧写法），
 本地时区，`ctx.setTimeout` 排期（插件卸载时自动清理）。
 
@@ -379,7 +379,7 @@ npm uninstall vectra @huggingface/transformers   # 0.12.0 起不再需要
 
 ### 同步运维面板
 
-页面对应后端 `src/plugins/syncConsole.ts`，控制台事件：
+页面对应后端 `src/interface/syncConsole.ts`，控制台事件：
 
 | 事件           | 权限 | 说明                                              |
 | -------------- | ---- | ------------------------------------------------- |
@@ -411,34 +411,37 @@ src/
 │   └── sync/
 │       ├── ignoreRule.ts     # 忽略规则值对象 + 归一化 + 通配匹配
 │       ├── decision.ts       # 同步三态判定（synced / skipped / failed）与是否跳过
-│       └── ports.ts          # SyncReporter 端口 + reportSyncItem
+│       ├── ports.ts          # SyncReporter 端口 + reportSyncItem
+│       └── runToken.ts       # 协作式取消令牌（RunToken / SyncAbortedError）
 ├── application/              # 应用层：用例编排
+│   ├── ai/aiMemory.ts        # 追问记忆（用户 / 群话题）与上下文选择
 │   └── sync/
 │       ├── incrementalSyncUseCase.ts  # 增量同步用例（水位 / 拉变更 / 同步页面与图片）
-│       └── ignoreListUseCase.ts       # 忽略列表增删查（校验 / 归一化 / 查重）
+│       ├── fullSyncUseCase.ts         # 全量同步用例（页面 / 图片 / 模块）
+│       ├── ignoreListUseCase.ts       # 忽略列表增删查（校验 / 归一化 / 查重）
+│       ├── syncTypes.ts               # 任务状态 / 进度 / 汇总类型
+│       └── syncStatePort.ts           # 水位 / 变更记录 / 图片指纹的仓储端口
 ├── infrastructure/           # 基础设施层：仓储与外部输出
-│   ├── persistence/
-│   │   ├── syncIgnoreRepository.ts    # sync_ignore 读写
-│   │   └── syncRunRepository.ts       # sync_runs / items / logs 读写与裁剪
-│   └── console/
-│       └── syncRunRecorder.ts         # 日志缓冲落库 + sync/log 广播
-├── services/
-│   ├── wikiBotService.ts     # wikiBot 服务：登录、代理、透明重登录、fetchPagePlainText
-│   ├── cronScheduler.ts      # 内置 cron 调度器（ctx.oniCron）
-│   ├── aiService.ts          # DeepSeek 客户端（Function Calling）+ 提示词
-│   ├── aiMemory.ts           # 追问记忆（用户 / 群话题）与上下文选择
-│   ├── messageRenderer.ts    # QQ markdown+按钮 / 纯文本 的渲染
-│   ├── syncRepository.ts     # 水位 / 最近更改 / 图片指纹的持久化
-│   └── syncTaskManager.ts    # 多任务状态机 + 协作式取消令牌（pausable / stoppable）
-├── plugins/                  # 接口层：Koishi 命令与控制台 API
+│   ├── ai/aiService.ts       # DeepSeek 客户端（Function Calling）+ 提示词
+│   ├── wiki/                 # wikiBot 服务：登录 / 代理 / 透明重登录 / fetchPagePlainText
+│   ├── persistence/          # databaseExtension（表定义）+ 三个仓储
+│   │   ├── databaseExtension.ts
+│   │   ├── syncRepository.ts      # 水位 / 最近更改 / 图片指纹（实现 SyncStatePort）
+│   │   ├── syncIgnoreRepository.ts
+│   │   └── syncRunRepository.ts   # sync_runs / items / logs 读写与裁剪
+│   ├── console/
+│   │   └── syncRunRecorder.ts     # 日志缓冲落库 + sync/log 广播
+│   ├── notify/syncNotifier.ts     # 同步成功后的群通知
+│   └── sync/                      # 任务状态机（syncTaskManager）、内置 cron（cronScheduler）
+├── interface/                # 接口层：Koishi 命令与控制台 API
 │   ├── cronService.ts        # 挂载 ctx.oniCron
-│   ├── databaseExtension.ts  # wikipages / oniaimemory / sync_* 表定义
 │   ├── syncConsole.ts        # 同步运维面板：任务控制 / 最近更改 / 忽略规则
 │   ├── queryCommands.ts      # x / 查wiki
 │   ├── aiQueryCommands.ts    # ai / ai.status（Agent 多轮调度）
 │   ├── syncCommands.ts       # sync.* 命令 + 贡献者定时任务
 │   ├── updateCommands.ts     # update.* / redirect / relogin
-│   └── routeRedirect.ts      # 短链路由
+│   ├── routeRedirect.ts      # 短链路由
+│   └── messageRenderer.ts    # QQ markdown+按钮 / 纯文本 的渲染
 ├── sync/                     # 纯执行器：只搬数据，不判断业务
 │   ├── pageSync.ts           # PageSyncer：单页 / 全量
 │   ├── incrementalSync.ts    # 兼容层，转导出 application 层的用例
@@ -453,7 +456,14 @@ src/
     └── matcher.ts            # 查询打分与模糊匹配（纯函数，可单测）
 
 tests/                        # 单元测试
-client/                       # 控制台前端（Vue）
+client/onisync/               # 控制台前端
+├── dashboard.vue             # 首页组合：概览 / 任务卡片 / 最近更改
+├── components/
+│   ├── TaskDetailDrawer.vue  # 任务详情抽屉（条目列表 + 实时日志）
+│   ├── ChangeDiffDrawer.vue  # 最近更改 diff 抽屉
+│   └── IgnoreRulePanel.vue   # 忽略规则维护
+├── format.ts / rpc.ts / types.ts / styles/drawer.scss
+└── ...
 ```
 
 ## 🧩 架构与扩展
@@ -482,19 +492,21 @@ RouteRedirect / SyncCommands / QueryCommands / UpdateCommands / AiQueryCommands
 
 | 层 | 目录 | 职责 | 允许依赖 |
 | --- | --- | --- | --- |
-| Domain | `src/domain/` | 实体、值对象、业务判定（忽略规则匹配、同步三态判定） | 无 |
-| Application | `src/application/` | 用例编排（增量同步、忽略列表） | domain |
-| Infrastructure | `src/infrastructure/` | 仓储实现、日志落库与广播 | domain |
-| Interface | `src/plugins/`、`client/` | Koishi 命令、控制台 API、Vue 组件 | 全部 |
+| Domain | `src/domain/` | 实体、值对象、业务判定（忽略规则匹配、同步三态判定）、取消令牌 | 无 |
+| Application | `src/application/` | 用例编排（增量同步、全量同步、忽略列表）、任务状态类型 | domain |
+| Infrastructure | `src/infrastructure/` | 仓储实现、wiki/AI 客户端、日志落库与广播、任务状态机 | domain / application |
+| Interface | `src/interface/`、`client/` | Koishi 命令、控制台 API、Vue 组件 | 全部 |
 
 迁移是分阶段的，**不推翻重写**：
 
 - **P0（已完成）** 建立 domain / application / infrastructure；把「是否跳过 / 是否同步」上移到领域层（`decideIgnore` / `classifySyncResult`）；增量同步迁到 `application/sync/incrementalSyncUseCase.ts`，`sync/incrementalSync.ts` 只做转导出。
 - **P1（已完成）** Page / Image / Module 执行器只做执行与上报；`SyncReporter` 端口把日志交给 `SyncRunRecorder`，`ctx.logger` 只留致命错误与启动信息。
 - **P2（已完成）** 忽略列表改为数据库驱动，命令与控制台 API 共用 `IgnoreListUseCase`。
-- **P3（下一步）** `plugins/` 物理迁入 `interface/`（纯移动 + 改 import，不改行为）；`services/wikiBotService` 抽成 `infrastructure/wiki`，AI 客户端抽成 `infrastructure/ai`。
-- **P4（下一步）** 全量同步（页面 / 图片 / 模块）收敛成 `FullSyncUseCase`，`SyncConsole` 只剩「参数装配 + 事件注册」。
-- **P5（可选）** 前端按 feature 拆目录（如 `client/onisync/components/TaskDetailDrawer.vue`）。
+- **P3（已完成）** `plugins/` → `interface/`；`wikiBotService` → `infrastructure/wiki`，`aiService` → `infrastructure/ai`，`aiMemory` → `application/ai`；仓储与表定义 → `infrastructure/persistence`；`src/services` 目录已移除。
+- **P4（已完成）** 全量同步收敛成 `FullSyncUseCase`；`SyncConsole` 只剩「装配依赖 + 接运行记录器 + 注册事件」。
+- **P5（已完成）** 前端拆成 `client/onisync/components/*`（任务详情 / diff / 忽略规则）+ 共享 `format` / `rpc` / `types` / 样式。
+
+> 后续可选（未排期）：把 `aiQueryCommands` 里的 Agent 循环抽到 `application/ai`；把 `syncTaskManager` 拆成「领域令牌 + 基础设施调度」两个更小的类。
 
 ### AI 数据流
 
@@ -538,7 +550,7 @@ QQ / 纯文本 + 数据来源
 3. 如果需要配置，在 `src/config.ts` 的**对应分组**里补字段，再用 `Pick` / `extends` 引用。
 
 ```ts
-// src/plugins/myFeature.ts
+// src/interface/myFeature.ts
 import { Context } from "koishi";
 import type { SiteConfig } from "../config";
 

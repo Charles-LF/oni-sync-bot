@@ -10,8 +10,8 @@ import type {
 } from "../infrastructure/persistence/databaseExtension";
 import { PageSyncer } from "../sync/pageSync";
 import { ImageSyncer } from "../sync/imgSync";
-import { ModuleSyncer } from "../sync/moduleSync";
 import type { SyncLoopHooks, SyncLoopProgress } from "../sync/hooks";
+import { FullSyncUseCase, type FullSyncTarget } from "../application/sync/fullSyncUseCase";
 import { SyncNotifier } from "../infrastructure/notify/syncNotifier";
 import { SyncRepository, SYNC_CONFIG_KEYS } from "../infrastructure/persistence/syncRepository";
 import type { SyncChangeListItem } from "../infrastructure/persistence/syncRepository";
@@ -23,7 +23,6 @@ import type {
   SyncPanelSnapshot,
   SyncTaskId,
   SyncTaskMeta,
-  SyncRunSummary,
 } from "../application/sync/syncTypes";
 import type { SyncNotifyItem } from "../sync/pageSync";
 import { getErrorMessage, logger } from "../utils/tools";
@@ -428,15 +427,19 @@ export class SyncConsole {
   }
 
   /** 全量页面 / 图片 / 模块：可在面板上开始、暂停、停止 */
-  private async startFullTask(taskId: SyncTaskId): Promise<ControlResult> {
+  private async startFullTask(taskId: FullSyncTarget): Promise<ControlResult> {
     const ready = await this.ensureReady();
     if (!ready.ok) {
       return { ok: false, message: ready.message, status: this.status() };
     }
 
-    const gg = this.ctx.wikiBot.getGGBot();
-    const bwiki = this.ctx.wikiBot.getBWikiBot();
     const ignoreRules = await this.ignoreRepo.loadRuleSet();
+    const useCase = new FullSyncUseCase({
+      source: this.ctx.wikiBot.getGGBot(),
+      target: this.ctx.wikiBot.getBWikiBot(),
+      database: this.ctx.database,
+      ignoreRules,
+    });
 
     const result = await this.manager.start(
       taskId,
@@ -446,45 +449,12 @@ export class SyncConsole {
         const hooks = this.createHooks(token, report, taskId, recorder);
 
         try {
-          let summary: SyncRunSummary;
-
-          if (taskId === "pages") {
-            const stats = await new PageSyncer(gg, bwiki, {
-              database: this.ctx.database,
-              ignoreRules,
-            }).syncAll(hooks);
-            summary = {
-              synced: stats.synced,
-              skipped: stats.skipped,
-              failed: stats.failed,
-              message: `页面 ${stats.total} 个：同步 ${stats.synced}、跳过 ${stats.skipped}、失败 ${stats.failed}`,
-            };
-          } else if (taskId === "images") {
-            const stats = await new ImageSyncer(gg, bwiki, {
-              ignoreRules,
-            }).syncAll(hooks);
-            summary = {
-              synced: stats.synced,
-              skipped: stats.skipped,
-              failed: stats.failed,
-              message: `图片 ${stats.total} 张：转存 ${stats.synced}、跳过 ${stats.skipped}、失败 ${stats.failed}`,
-            };
-          } else {
-            const stats = await new ModuleSyncer(gg, bwiki, {
-              ignoreRules,
-            }).syncAll(hooks);
-            summary = {
-              synced: stats.synced,
-              skipped: stats.skipped,
-              failed: stats.failed,
-              message: `模块 ${stats.total} 个：同步 ${stats.synced}、跳过 ${stats.skipped}、失败 ${stats.failed}`,
-            };
-          }
-
+          const summary = await useCase.execute(taskId, hooks);
           await this.finishRun(taskId, summary.message);
           await recorder.finish({
             state: "completed",
             message: summary.message,
+            total: summary.total,
             synced: summary.synced,
             skipped: summary.skipped,
             failed: summary.failed,

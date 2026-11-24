@@ -4,6 +4,7 @@ import { ModuleSyncer } from "../src/sync/moduleSync";
 import { PageSyncer } from "../src/sync/pageSync";
 import { ImageSyncer } from "../src/sync/imgSync";
 import { IgnoreRuleSet } from "../src/domain/sync/ignoreRule";
+import { describeFullSync } from "../src/application/sync/fullSyncUseCase";
 
 /**
  * 这些测试针对 P3 引入的**依赖注入**本身：
@@ -158,5 +159,23 @@ describe("sync 模块的依赖注入", () => {
       assert.equal(result.reason, "ignored");
       assert.ok(result.detail?.includes("教程*"));
     });
+  });
+});
+
+describe("application/sync/FullSyncUseCase 摘要", () => {
+  it("三种任务的结束摘要保持原有文案（会写进任务卡片与 last_result）", () => {
+    const stats = { total: 10, synced: 8, skipped: 1, failed: 1 };
+    assert.equal(
+      describeFullSync("pages", stats),
+      "页面 10 个：同步 8、跳过 1、失败 1",
+    );
+    assert.equal(
+      describeFullSync("images", stats),
+      "图片 10 张：转存 8、跳过 1、失败 1",
+    );
+    assert.equal(
+      describeFullSync("modules", stats),
+      "模块 10 个：同步 8、跳过 1、失败 1",
+    );
   });
 });
