@@ -283,6 +283,10 @@ npm uninstall vectra @huggingface/transformers   # 0.12.0 起不再需要
 - 三种类型分别匹配：`page` 不影响 `image`，反之亦然
 - 命中后条目记为「跳过」，原因写进任务详情；内置名单（`教程` / `首页` 等）仍然兜底
 - 规则在**每次任务开始前**加载一次，循环里只做内存匹配
+- **内置规则只补种一次**：`domain/sync/defaultIgnores.ts` 里带一份初始名单（`.ico` 与超过体积上限的 GIF），
+  启动时按 `IGNORE_SEED_VERSION` 判断是否已经补过；同版本重启不会再塞，管理员删掉的规则不会复活。
+  当前这一版补种的是 `Favicon.ico`、`Site-favicon.ico`、`EX1-453222.gif`、`EX1-456658.gif`、
+  `EX1-462129.gif`、`U37-482255.gif`、`U51-594211.gif`
 
 #### 增量同步是怎么跑的
 

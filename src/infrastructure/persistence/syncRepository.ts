@@ -13,6 +13,8 @@ export const SYNC_CONFIG_KEYS = {
   lastSyncTime: "last_sync_time",
   /** 各任务上次结果的键前缀（后面接任务 id） */
   lastResultPrefix: "last_result:",
+  /** 已经补种过哪一版内置忽略规则（见 domain/sync/defaultIgnores.ts） */
+  ignoreSeedVersion: "ignore_seed_version",
 } as const;
 
 /** 一次批量的插入上限：SQLite 单语句变量数有上限，200 稳妥 */

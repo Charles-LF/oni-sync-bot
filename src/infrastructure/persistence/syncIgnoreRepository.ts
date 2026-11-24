@@ -6,6 +6,11 @@ import {
   type IgnoreType,
   type StoredIgnoreRule,
 } from "../../domain/sync/ignoreRule";
+import {
+  DEFAULT_IGNORE_RULES,
+  IGNORE_SEED_VERSION,
+} from "../../domain/sync/defaultIgnores";
+import { SYNC_CONFIG_KEYS } from "./syncRepository";
 import { getErrorMessage, logger } from "../../utils/tools";
 
 /**
@@ -65,6 +70,35 @@ export class SyncIgnoreRepository {
       normalized,
     });
     return result?.removed ?? 0;
+  }
+
+  /**
+   * 补种内置默认规则（见 `domain/sync/defaultIgnores.ts`）。
+   *
+   * 只在 `IGNORE_SEED_VERSION` 变化时执行一次：同版本重启直接返回 0，
+   * 管理员用 `sync.ignore.remove` 删掉的规则不会复活；库里已经存在的同名规则也跳过。
+   * 返回本次真正插入的条数。
+   */
+  async seedDefaults(
+    version: string = IGNORE_SEED_VERSION,
+    rules: readonly IgnoreRule[] = DEFAULT_IGNORE_RULES,
+  ): Promise<number> {
+    const rows = await this.ctx.database.get("sync_config", {
+      key: SYNC_CONFIG_KEYS.ignoreSeedVersion,
+    });
+    if (rows[0]?.value === version) return 0;
+
+    let inserted = 0;
+    for (const rule of rules) {
+      if (await this.find(rule.type, rule.name)) continue;
+      await this.insert(rule);
+      inserted += 1;
+    }
+
+    await this.ctx.database.upsert("sync_config", [
+      { key: SYNC_CONFIG_KEYS.ignoreSeedVersion, value: version },
+    ]);
+    return inserted;
   }
 
   /** 同步开始前加载一次（读失败不影响同步：退化为「没有动态规则」） */

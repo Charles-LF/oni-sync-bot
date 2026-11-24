@@ -248,13 +248,26 @@ export class SyncConsole {
     void this.initialize();
   }
 
-  /** 读库 → 收尾中断的运行记录 → 注册增量 cron → 推送一次 */
+  /** 读库 → 收尾中断的运行记录 → 补种内置忽略规则 → 注册增量 cron → 推送一次 */
   private async initialize(): Promise<void> {
     await this.repo.loadConfig();
     await this.runRepo.closeDanglingRuns();
+    await this.seedIgnoreDefaults();
     this.scheduleDeltaCron();
     await this.refreshStats();
     this.publish();
+  }
+
+  /** 内置忽略规则只在版本变化时补种一次；失败只告警，不影响启动 */
+  private async seedIgnoreDefaults(): Promise<void> {
+    try {
+      const inserted = await this.ignoreRepo.seedDefaults();
+      if (inserted > 0) {
+        logger.info(`[忽略规则] 已补种 ${inserted} 条内置规则`);
+      }
+    } catch (error) {
+      logger.warn(`[忽略规则] 补种内置规则失败：${getErrorMessage(error)}`);
+    }
   }
 
   // ------------------------------------------------------------- 状态组装
